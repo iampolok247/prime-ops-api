@@ -10,7 +10,7 @@ echo '🚀 Starting the production server with PM2...'
 set -x
 
 # Restart the app using PM2 ecosystem config
-pm2 restart ecosystem.config.js
+pm2 restart ecosystem.config.cjs
 
 # Give PM2 some time to spin up
 sleep 2
