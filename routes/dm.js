@@ -8,7 +8,7 @@ import SEOWork from "../models/SEOWork.js";
 const router = express.Router();
 
 router.get(`/euhan`);
-async () => {
+async (req, res) => {
   return res.json({ message: "hello world" });
 };
 
