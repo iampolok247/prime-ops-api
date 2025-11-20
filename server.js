@@ -43,9 +43,7 @@ const ALLOWED_ORIGINS = [
   process.env.CLIENT_ORIGIN || "http://localhost:5173",
   "http://localhost:5174",
   "http://127.0.0.1:5173",
-  "https://prime-ops.vercel.app",
-  "https://prime-ops-jrpoloks-projects.vercel.app",
-  "https://prime-i4fgju99s-jrpoloks-projects.vercel.app",
+  "http://31.97.228.226:5173",
 ];
 app.use(
   cors({
@@ -67,7 +65,7 @@ app.use(
 );
 
 // --- Health check ---
-app.get("/healthi", (req, res) =>
+app.get("/health", (req, res) =>
   res.json({ ok: true, service: "primeops-api" })
 );
 
