@@ -19,5 +19,7 @@ sleep 2
 pm2 save
 set +x
 
+pm2 ls
+
 echo ''
 echo '✅ The app is running at: http://localhost:6565'
