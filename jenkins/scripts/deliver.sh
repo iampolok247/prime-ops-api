@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
 set -e  # Exit immediately if a command exits with a non-zero status
 
-echo '📦 Building the NestJS application...'
-set -x
-npm run build
-set +x
+# echo '📦 Building the NestJS application...'
+# set -x
+# npm run build
+# set +x
 
 echo '🚀 Starting the production server with PM2...'
 set -x
