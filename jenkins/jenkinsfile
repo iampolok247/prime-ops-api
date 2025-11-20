@@ -1,0 +1,36 @@
+/* groovylint-disable-next-line CompileStatic */
+pipeline {
+    agent any
+
+    environment {
+        CI = 'true'
+    }
+
+    stages {
+        stage('Install') {
+            steps {
+                sh 'npm install'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'npm run build'
+            }
+        }
+
+        // stage('Test') {
+        //     steps {
+        //         sh 'chmod +x ./jenkins/scripts/test.sh'
+        //         sh './jenkins/scripts/test.sh'
+        //     }
+        // }
+
+        stage('Deliver') {
+            steps {
+                sh 'chmod +x ./jenkins/scripts/deliver.sh'
+                sh './jenkins/scripts/deliver.sh'
+            }
+        }
+    }
+}
