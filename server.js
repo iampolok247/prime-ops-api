@@ -66,13 +66,8 @@ app.use(
   })
 );
 
-app.get(`/`);
-async (req, res) => {
-  return res.json({ ok: true, message: "ci/cd" });
-};
-
 // --- Health check ---
-app.get("/health", (req, res) =>
+app.get("/healthi", (req, res) =>
   res.json({ ok: true, service: "primeops-api" })
 );
 
