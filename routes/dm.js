@@ -7,11 +7,6 @@ import SEOWork from "../models/SEOWork.js";
 
 const router = express.Router();
 
-router.get(`/euhan`);
-async (req, res) => {
-  return res.json({ message: "hello world" });
-};
-
 /** -------- Expense (DM only) -------- */
 router.get(
   "/expense",
