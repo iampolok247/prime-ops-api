@@ -68,9 +68,11 @@ router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, re
  */
 router.put('/:id', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res) => {
   console.log(`[UPDATE USER] ID: ${req.params.id}, Body:`, JSON.stringify(req.body));
+  console.log(`[UPDATE USER] Request User Role: ${req.user.role}, User ID: ${req.user.id}`);
   
   const target = await User.findById(req.params.id).select('+password');
   if (!target) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
+  console.log(`[UPDATE USER] Target User Role: ${target.role}, Target Name: ${target.name}`);
   
   const { name, email, role, department, designation, avatar, phone, isActive, newPassword, displayOrder } = req.body || {};
   
