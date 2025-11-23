@@ -40,7 +40,7 @@ router.get('/list', requireAuth, authorize(['Admin', 'SuperAdmin', 'Accountant',
  * Admin only — cannot create SuperAdmin
  */
 router.post('/', requireAuth, authorize(['Admin']), async (req, res) => {
-  const { name, email, password, role, department, designation, avatar, phone } = req.body || {};
+  const { name, email, password, role, department, designation, avatar, phone, displayOrder } = req.body || {};
   if (role === 'SuperAdmin') {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot create Super Admin' });
   }
@@ -49,7 +49,7 @@ router.post('/', requireAuth, authorize(['Admin']), async (req, res) => {
 
   const hashed = await hashPassword(password || 'password123');
   const user = await User.create({
-    name, email, password: hashed, role, department, designation, avatar, phone
+    name, email, password: hashed, role, department, designation, avatar, phone, displayOrder: displayOrder || 0
   });
   const { password: _, ...safe } = user.toObject();
   return res.status(201).json({ user: safe });
@@ -66,7 +66,7 @@ router.put('/:id', requireAuth, authorize(['Admin']), async (req, res) => {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot modify Super Admin' });
   }
 
-  const { name, email, role, department, designation, avatar, phone, isActive, newPassword } = req.body || {};
+  const { name, email, role, department, designation, avatar, phone, isActive, newPassword, displayOrder } = req.body || {};
   if (email) target.email = email;
   if (name) target.name = name;
   if (role) {
@@ -79,6 +79,7 @@ router.put('/:id', requireAuth, authorize(['Admin']), async (req, res) => {
   if (designation !== undefined) target.designation = designation;
   if (avatar !== undefined) target.avatar = avatar;
   if (phone !== undefined) target.phone = phone;
+  if (displayOrder !== undefined) target.displayOrder = displayOrder;
   if (typeof isActive === 'boolean') target.isActive = isActive;
   if (newPassword) target.password = await hashPassword(newPassword);
 
