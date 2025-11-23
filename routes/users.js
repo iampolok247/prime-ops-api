@@ -62,11 +62,21 @@ router.post('/', requireAuth, authorize(['Admin']), async (req, res) => {
 router.put('/:id', requireAuth, authorize(['Admin']), async (req, res) => {
   const target = await User.findById(req.params.id).select('+password');
   if (!target) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
+  
+  const { name, email, role, department, designation, avatar, phone, isActive, newPassword, displayOrder } = req.body || {};
+  
+  // Allow displayOrder change for SuperAdmin, but prevent other changes
   if (target.role === 'SuperAdmin') {
+    // Only allow displayOrder update for SuperAdmin
+    if (displayOrder !== undefined) {
+      target.displayOrder = displayOrder;
+      await target.save();
+      const { password: _, ...safe } = target.toObject();
+      return res.json({ user: safe });
+    }
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot modify Super Admin' });
   }
 
-  const { name, email, role, department, designation, avatar, phone, isActive, newPassword, displayOrder } = req.body || {};
   if (email) target.email = email;
   if (name) target.name = name;
   if (role) {
