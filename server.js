@@ -165,6 +165,9 @@ const ALLOWED_ORIGINS = [
   "http://localhost:5173",
   "http://127.0.0.1:5173",
   "http://31.97.228.226:5173",
+  "http://31.97.228.226",
+  "http://31.97.228.226:80",
+  "http://31.97.228.226:3000",
 ];
 
 app.use(
@@ -173,16 +176,23 @@ app.use(
       if (!origin) return cb(null, true);
       if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
 
-      if (origin.includes("prime-ops") && origin.includes(".vercel.app"))
+      if (origin && origin.includes("prime-ops") && origin.includes(".vercel.app"))
+        return cb(null, true);
+      
+      // Allow any origin from the same server
+      if (origin && origin.includes("31.97.228.226"))
         return cb(null, true);
 
+      console.log("❌ CORS blocked origin:", origin);
       return cb(null, false);
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [
-      "Access-Control-Allow-Origin",
       "Content-Type",
       "Authorization",
+      "X-Requested-With",
+      "Accept",
     ],
   })
 );
@@ -202,6 +212,7 @@ app.use("/api/dm", dmRoutes);
 app.use("/api/admission", admissionRoutes);
 app.use("/api/accounting", accountingRoutes);
 app.use("/api/reports", reportsRoutes);
+app.use("/api/mg", mgRoutes);
 app.use("/api/messages", messagesRoutes);
 app.use("/api/admission-targets", admissionTargetsRoutes);
 app.use("/api/batches", batchRoutes);
