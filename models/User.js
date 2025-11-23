@@ -26,6 +26,7 @@ const UserSchema = new mongoose.Schema(
       type: String,
       default: 'https://ui-avatars.com/api/?name=Prime+Academy&background=253985&color=fff'
     },
+    displayOrder: { type: Number, default: 0 }, // For custom employee ordering
     isActive: { type: Boolean, default: true },
     joinDate: { type: Date, default: Date.now }
   },

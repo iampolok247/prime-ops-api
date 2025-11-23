@@ -101,4 +101,27 @@ router.delete('/:id', requireAuth, authorize(['Admin']), async (req, res) => {
   return res.json({ ok: true });
 });
 
+/**
+ * Reorder employees (update display order)
+ * Admin only — update display order for custom employee hierarchy
+ */
+router.put('/reorder', requireAuth, authorize(['Admin']), async (req, res) => {
+  const { orders } = req.body || {}; // Array of { id, displayOrder }
+  if (!Array.isArray(orders)) {
+    return res.status(400).json({ code: 'INVALID_INPUT', message: 'orders must be an array' });
+  }
+
+  try {
+    // Update display order for each user
+    const updates = orders.map(({ id, displayOrder }) => 
+      User.findByIdAndUpdate(id, { displayOrder }, { new: false })
+    );
+    await Promise.all(updates);
+    
+    return res.json({ ok: true, message: 'Display order updated successfully' });
+  } catch (error) {
+    return res.status(500).json({ code: 'UPDATE_FAILED', message: error.message });
+  }
+});
+
 export default router;
