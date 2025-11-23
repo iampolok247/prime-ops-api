@@ -37,8 +37,10 @@ router.post('/login', async (req, res) => {
 
 // Me
 router.get('/me', requireAuth, async (req, res) => {
+  console.log('[AUTH /me] JWT Token contains:', JSON.stringify(req.user));
   const user = await User.findById(req.user.id);
   if (!user) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
+  console.log('[AUTH /me] Database shows role:', user.role);
   return res.json({ user });
 });
 
