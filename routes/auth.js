@@ -41,6 +41,20 @@ router.get('/me', requireAuth, async (req, res) => {
   const user = await User.findById(req.user.id);
   if (!user) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
   console.log('[AUTH /me] Database shows role:', user.role);
+  
+  // If JWT role doesn't match database role, return both for debugging
+  if (req.user.role !== user.role) {
+    console.log('[AUTH /me] WARNING: JWT role mismatch! JWT:', req.user.role, 'DB:', user.role);
+    return res.json({ 
+      user, 
+      _debug: { 
+        jwtRole: req.user.role, 
+        dbRole: user.role,
+        message: 'Role mismatch detected - please logout and login again'
+      }
+    });
+  }
+  
   return res.json({ user });
 });
 
