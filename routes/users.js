@@ -60,12 +60,14 @@ router.post('/', requireAuth, authorize(['Admin']), async (req, res) => {
  * Admin only — cannot modify/demote SuperAdmin
  */
 router.put('/:id', requireAuth, authorize(['Admin']), async (req, res) => {
+  console.log(`[UPDATE USER] ID: ${req.params.id}, Body:`, JSON.stringify(req.body));
+  
   const target = await User.findById(req.params.id).select('+password');
   if (!target) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
   
   // Log request body for debugging SuperAdmin updates
   if (target.role === 'SuperAdmin') {
-    console.log('Updating SuperAdmin - Request body:', JSON.stringify(req.body));
+    console.log('[SuperAdmin] Attempting update - User:', target.name, 'Role:', target.role);
   }
   
   const { name, email, role, department, designation, avatar, phone, isActive, newPassword, displayOrder } = req.body || {};
@@ -74,15 +76,16 @@ router.put('/:id', requireAuth, authorize(['Admin']), async (req, res) => {
   if (target.role === 'SuperAdmin') {
     // Only allow displayOrder to be updated
     if ('displayOrder' in req.body) {
-      target.displayOrder = displayOrder;
+      target.displayOrder = parseInt(displayOrder) || 0;
       await target.save();
       const { password: _, ...safe } = target.toObject();
-      console.log('SuperAdmin displayOrder updated successfully to:', displayOrder);
+      console.log('SuperAdmin displayOrder updated successfully to:', target.displayOrder);
       return res.json({ user: safe });
     }
     // If displayOrder not in request, reject
-    console.log('SuperAdmin update rejected - no displayOrder in request');
-    return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot modify Super Admin' });
+    console.log('SuperAdmin update rejected - displayOrder not in request body');
+    console.log('Request body keys:', Object.keys(req.body));
+    return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot modify Super Admin - only displayOrder can be changed' });
   }
 
   if (email) target.email = email;
