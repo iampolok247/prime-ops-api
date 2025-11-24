@@ -159,31 +159,20 @@ app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
 
 // ---------- CORS ----------
-const ALLOWED_ORIGINS = [
-  process.env.CLIENT_ORIGIN || "http://localhost:5173",
-  "http://localhost:5174",
-  "http://localhost:5173",
-  "http://127.0.0.1:5173",
-  "http://31.97.228.226:5173",
-];
-
 app.use(
   cors({
-    origin: (origin, cb) => {
-      if (!origin) return cb(null, true);
-      if (ALLOWED_ORIGINS.includes(origin)) return cb(null, true);
-
-      if (origin.includes("prime-ops") && origin.includes(".vercel.app"))
-        return cb(null, true);
-
-      return cb(null, false);
-    },
+    origin: true, // Allow all origins for now to debug
     credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [
-      "Access-Control-Allow-Origin",
       "Content-Type",
       "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
     ],
+    exposedHeaders: ["Content-Range", "X-Content-Range"],
+    maxAge: 86400, // 24 hours
   })
 );
 
@@ -202,6 +191,7 @@ app.use("/api/dm", dmRoutes);
 app.use("/api/admission", admissionRoutes);
 app.use("/api/accounting", accountingRoutes);
 app.use("/api/reports", reportsRoutes);
+app.use("/api/mg", mgRoutes);
 app.use("/api/messages", messagesRoutes);
 app.use("/api/admission-targets", admissionTargetsRoutes);
 app.use("/api/batches", batchRoutes);
@@ -227,7 +217,7 @@ app.use((err, req, res, next) => {
 });
 
 // ---------- Start Server ----------
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 5000;
 
 connectDB(process.env.MONGO_URI)
   .then(async () => {
@@ -236,9 +226,10 @@ connectDB(process.env.MONGO_URI)
     // Seed users AFTER DB connect
     await seedInitialUsers();
 
-    app.listen(PORT, () =>
-      console.log(`🚀 API running on http://localhost:${PORT}`)
-    );
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 API running on http://0.0.0.0:${PORT}`);
+      console.log(`🚀 Accessible at http://31.97.228.226:${PORT}`);
+    });
   })
   .catch((err) => {
     console.error("❌ DB connection failed:", err.message);
