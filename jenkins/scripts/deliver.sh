@@ -21,5 +21,5 @@ set +x
 
 pm2 ls
 
-echo ''
+echo 'testing jenkins'
 echo '✅ The app is running at: http://localhost:5000'
