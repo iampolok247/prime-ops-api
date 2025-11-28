@@ -2,9 +2,9 @@
 pipeline {
     agent any
 
-    tools {
-        nodejs 'NodeJS 18.x'  // MUST match the name from Global Tool Configuration
-    }
+    // tools {
+    //     nodejs 'NodeJS 18.x'  // MUST match the name from Global Tool Configuration
+    // }
 
     environment {
         CI = 'true'
@@ -13,22 +13,11 @@ pipeline {
     stages {
         stage('Install') {
             steps {
+                sh 'echo hello world'
+                sh 'node -v'
                 sh 'npm install'
             }
         }
-
-        // stage('Build') {
-        //     steps {
-        //         sh 'npm run build'
-        //     }
-        // }
-
-        // stage('Test') {
-        //     steps {
-        //         sh 'chmod +x ./jenkins/scripts/test.sh'
-        //         sh './jenkins/scripts/test.sh'
-        //     }
-        // }
 
         stage('Deliver') {
             steps {
