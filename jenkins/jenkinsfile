@@ -2,12 +2,18 @@
 pipeline {
     agent any
 
+    options {
+        skipStagesAfterUnstable()
+    }
+    
     tools {
         nodejs 'NodeJS 20.x'
     }
 
+
     environment {
         CI = 'true'
+        BUILD_KEEP_CHILD_PROCESSES = 'true'
     }
 
     stages {
