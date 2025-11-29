@@ -9,7 +9,7 @@ dotenv.config();
 
 async function checkAdmittedDates() {
   try {
-    await mongoose.connect(process.env.MONGO_URI || process.env.MONGO_URI);
+    await mongoose.connect(process.env.MONGO_URI);
     console.log("Connected to MongoDB");
 
     // Find all admitted leads

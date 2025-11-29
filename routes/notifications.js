@@ -7,6 +7,40 @@ const router = express.Router();
 // All routes require authentication
 router.use(requireAuth);
 
+// @route   GET /api/notifications/unread-count
+// @desc    Get count of unread notifications
+// @access  Private
+router.get('/unread-count', async (req, res) => {
+  try {
+    const count = await Notification.countDocuments({
+      recipient: req.user.id,
+      isRead: false
+    });
+
+    res.json({ count });
+  } catch (error) {
+    console.error('Error fetching unread count:', error);
+    res.status(500).json({ code: 'FETCH_ERROR', message: 'Failed to fetch unread count' });
+  }
+});
+
+// @route   PATCH /api/notifications/mark-all-read
+// @desc    Mark all notifications as read
+// @access  Private
+router.patch('/mark-all-read', async (req, res) => {
+  try {
+    await Notification.updateMany(
+      { recipient: req.user.id, isRead: false },
+      { isRead: true, readAt: new Date() }
+    );
+
+    res.json({ message: 'All notifications marked as read' });
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error);
+    res.status(500).json({ code: 'UPDATE_ERROR', message: 'Failed to update notifications' });
+  }
+});
+
 // @route   GET /api/notifications
 // @desc    Get user's notifications
 // @access  Private
@@ -53,23 +87,6 @@ router.get('/', async (req, res) => {
   }
 });
 
-// @route   GET /api/notifications/unread-count
-// @desc    Get count of unread notifications
-// @access  Private
-router.get('/unread-count', async (req, res) => {
-  try {
-    const count = await Notification.countDocuments({
-      recipient: req.user.id,
-      isRead: false
-    });
-
-    res.json({ count });
-  } catch (error) {
-    console.error('Error fetching unread count:', error);
-    res.status(500).json({ code: 'FETCH_ERROR', message: 'Failed to fetch unread count' });
-  }
-});
-
 // @route   PATCH /api/notifications/:id/read
 // @desc    Mark notification as read
 // @access  Private
@@ -92,23 +109,6 @@ router.patch('/:id/read', async (req, res) => {
   } catch (error) {
     console.error('Error marking notification as read:', error);
     res.status(500).json({ code: 'UPDATE_ERROR', message: 'Failed to update notification' });
-  }
-});
-
-// @route   PATCH /api/notifications/mark-all-read
-// @desc    Mark all notifications as read
-// @access  Private
-router.patch('/mark-all-read', async (req, res) => {
-  try {
-    await Notification.updateMany(
-      { recipient: req.user.id, isRead: false },
-      { isRead: true, readAt: new Date() }
-    );
-
-    res.json({ message: 'All notifications marked as read' });
-  } catch (error) {
-    console.error('Error marking all notifications as read:', error);
-    res.status(500).json({ code: 'UPDATE_ERROR', message: 'Failed to update notifications' });
   }
 });
 

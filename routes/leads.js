@@ -1,6 +1,7 @@
 import express from 'express';
 import Lead from '../models/Lead.js';
 import User from '../models/User.js';
+import Course from '../models/Course.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
 
@@ -17,6 +18,14 @@ const genLeadId = async () => {
 router.post('/', requireAuth, authorize(['DigitalMarketing']), async (req, res) => {
   const { name, phone, email, interestedCourse, source } = req.body || {};
   if (!name) return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Name required' });
+
+  // Validate course name if provided
+  if (interestedCourse) {
+    const course = await Course.findOne({ name: { $regex: `^${interestedCourse}$`, $options: 'i' } });
+    if (!course) {
+      return res.status(400).json({ code: 'INVALID_COURSE', message: `Course "${interestedCourse}" does not exist` });
+    }
+  }
 
   // simple dedupe guard: same phone OR email within last 180 days
   const since = new Date(); since.setDate(since.getDate() - 180);
@@ -61,8 +70,14 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
       return res.status(400).json({ code: 'HEADER_MISSING', message: 'Headers must be Name,Phone,Email,InterestedCourse,Source' });
     }
 
+    // Get all valid courses for validation
+    const allCourses = await Course.find({});
+    const validCourseNames = allCourses.map(c => c.name.trim().toLowerCase());
+
     const since = new Date(); since.setDate(since.getDate() - 180);
     let created = 0, skipped = 0;
+    const errors = [];
+    
     for (let i = 1; i < lines.length; i++) {
       const parts = lines[i].split(',').map(x => x.trim());
       if (!parts.length || parts.join('') === '') continue;
@@ -73,7 +88,18 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
       const interestedCourse = parts[idx.InterestedCourse] || '';
       const source = parts[idx.Source] || 'Others';
 
-      if (!name) { skipped++; continue; }
+      if (!name) { 
+        skipped++; 
+        errors.push(`Row ${i + 1}: Name is required`);
+        continue; 
+      }
+
+      // Validate course name matches exactly
+      if (interestedCourse && !validCourseNames.includes(interestedCourse.trim().toLowerCase())) {
+        skipped++;
+        errors.push(`Row ${i + 1}: Course "${interestedCourse}" does not exist`);
+        continue;
+      }
 
       const dup = await Lead.findOne({
         $and: [
@@ -82,7 +108,11 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
         ]
       });
 
-      if (dup) { skipped++; continue; }
+      if (dup) { 
+        skipped++; 
+        errors.push(`Row ${i + 1}: Duplicate phone/email`);
+        continue; 
+      }
 
       await Lead.create({
         leadId: await genLeadId(),
@@ -93,7 +123,7 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
       created++;
     }
 
-    return res.json({ ok: true, created, skipped });
+    return res.json({ ok: true, created, skipped, errors: errors.slice(0, 10) }); // Return first 10 errors
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
@@ -265,6 +295,51 @@ router.patch('/:id/status', requireAuth, authorize(['DigitalMarketing']), async 
   await lead.save();
   const populated = await Lead.findById(lead._id).populate('assignedTo', 'name email role').populate('assignedBy', 'name email role');
   return res.json({ lead: populated });
+});
+
+// Delete lead (DM only - can delete any of their own leads, even if assigned)
+router.delete('/:id', requireAuth, authorize(['DigitalMarketing']), async (req, res) => {
+  try {
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+    
+    // Only allow deletion if the lead was created by the current user (assignedBy check)
+    if (String(lead.assignedBy) !== String(req.user.id)) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Can only delete leads you created' });
+    }
+    
+    await Lead.deleteOne({ _id: req.params.id });
+    return res.json({ ok: true, message: 'Lead deleted successfully' });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// Update lead (DM only - can update any of their own leads, even if assigned)
+router.patch('/:id', requireAuth, authorize(['DigitalMarketing']), async (req, res) => {
+  try {
+    const { name, phone, email, interestedCourse, source } = req.body || {};
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+    
+    // Only allow update if the lead was created by the current user (assignedBy check)
+    if (String(lead.assignedBy) !== String(req.user.id)) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Can only update leads you created' });
+    }
+    
+    // Update allowed fields
+    if (name) lead.name = name;
+    if (phone !== undefined) lead.phone = phone;
+    if (email !== undefined) lead.email = email?.toLowerCase();
+    if (interestedCourse !== undefined) lead.interestedCourse = interestedCourse;
+    if (source !== undefined) lead.source = source;
+    
+    await lead.save();
+    const populated = await Lead.findById(lead._id).populate('assignedTo', 'name email role').populate('assignedBy', 'name email role');
+    return res.json({ lead: populated });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
 });
 
 export default router;

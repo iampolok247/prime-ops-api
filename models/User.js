@@ -26,7 +26,13 @@ const UserSchema = new mongoose.Schema(
       type: String,
       default: 'https://ui-avatars.com/api/?name=Prime+Academy&background=253985&color=fff'
     },
-    displayOrder: { type: Number, default: 0 }, // For custom employee ordering
+      displayOrder: { type: Number, default: 0 }, // For custom employee ordering
+      // Manual order set for SuperAdmins:
+      // 1. Ikhtiar Rahman
+      // 2. Pauline Price
+      // 3. Raj Pahal
+      // 4. Shahriar Arafat
+      // 5. Kazi Sazzad
     isActive: { type: Boolean, default: true },
     joinDate: { type: Date, default: Date.now }
   },

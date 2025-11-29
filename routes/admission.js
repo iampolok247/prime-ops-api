@@ -155,6 +155,34 @@ router.get('/fees', requireAuth, async (req, res) => {
   return res.json({ fees: rows });
 });
 
+// Check if admission fee is collected/approved for a lead
+router.get('/fees/status/:leadId', requireAuth, async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    
+    // Find approved admission fee for this lead
+    const fee = await AdmissionFee.findOne({
+      lead: leadId,
+      status: 'Approved' // Only check for approved fees
+    }).populate('lead', 'leadId name phone email status');
+
+    if (!fee) {
+      return res.json({ 
+        hasApprovedFee: false, 
+        message: 'Admission fees not collected or not approved' 
+      });
+    }
+
+    return res.json({ 
+      hasApprovedFee: true, 
+      fee: fee,
+      message: 'Admission fees collected and approved' 
+    });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
 // Create fee (Admission only)
 router.post('/fees', requireAuth, async (req, res) => {
   if (!isAdmission(req.user)) {
