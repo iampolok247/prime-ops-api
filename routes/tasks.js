@@ -202,28 +202,28 @@ router.patch('/:id/status', requireAuth, async (req, res) => {
 
 /**
  * Update Task (full update including priority, tags, etc.)
+ * Only the person who assigned the task (assignedBy) can edit it
  */
 router.put('/:id', requireAuth, async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ code: 'NOT_FOUND', message: 'Task not found' });
 
-    // Check permissions
-    const isAssignee = task.assignedTo.some(id => id.toString() === req.user.id);
+    // Check permissions - only assignedBy user can edit
     const isAssigner = task.assignedBy.toString() === req.user.id;
-    const isAdmin = ['SuperAdmin', 'Admin'].includes(req.user.role);
     
-    if (!isAssignee && !isAssigner && !isAdmin) {
-      return res.status(403).json({ code: 'FORBIDDEN', message: 'Insufficient permissions' });
+    if (!isAssigner) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Only the person who assigned this task can edit it' });
     }
 
-    const { title, description, priority, tags, dueDate, assignedTo } = req.body;
+    const { title, description, priority, tags, dueDate, assignedTo, category } = req.body;
     
     if (title) task.title = title;
     if (description !== undefined) task.description = description;
     if (priority) task.priority = priority;
     if (tags) task.tags = tags;
     if (dueDate) task.dueDate = new Date(dueDate);
+    if (category !== undefined) task.category = category;
     if (assignedTo) task.assignedTo = Array.isArray(assignedTo) ? assignedTo : [assignedTo];
     
     await task.save();
@@ -412,11 +412,19 @@ router.patch('/:id/board-position', requireAuth, async (req, res) => {
 
 /**
  * Delete Task
+ * Only the person who assigned the task (assignedBy) can delete it
  */
-router.delete('/:id', requireAuth, authorize(['SuperAdmin', 'Admin']), async (req, res) => {
+router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const task = await Task.findById(req.params.id);
     if (!task) return res.status(404).json({ code: 'NOT_FOUND', message: 'Task not found' });
+
+    // Check permissions - only assignedBy user can delete
+    const isAssigner = task.assignedBy.toString() === req.user.id;
+    
+    if (!isAssigner) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Only the person who assigned this task can delete it' });
+    }
 
     await task.deleteOne();
     return res.json({ ok: true });
