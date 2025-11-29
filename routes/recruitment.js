@@ -89,10 +89,11 @@ router.post(
   authorize(R_WRITE),
   async (req, res) => {
     try {
-      const { name, jobInterest, source, district, trained, cvLink, date } = req.body;
-      const canId = await nextId(Candidate, 'CAN');
+      const { canId, name, jobInterest, source, district, trained, cvLink, date } = req.body;
+      // Use provided canId or generate one if not provided
+      const finalCanId = canId && canId.trim() ? canId.trim() : await nextId(Candidate, 'CAN');
       const created = await Candidate.create({
-        canId, name, jobInterest, source, district, trained, cvLink, date
+        canId: finalCanId, name, jobInterest, source, district, trained, cvLink, date
       });
       res.status(201).json(created);
     } catch (e) {
@@ -173,9 +174,10 @@ router.post(
   authorize(R_WRITE),
   async (req, res) => {
     try {
-      const { name, address, jobLocation, mouDate } = req.body;
-      const empId = await nextId(Employer, 'EMP');
-      const created = await Employer.create({ empId, name, address, jobLocation, mouDate });
+      const { empId, name, address, jobLocation, mouDate } = req.body;
+      // Use provided empId or generate one if not provided
+      const finalEmpId = empId && empId.trim() ? empId.trim() : await nextId(Employer, 'EMP');
+      const created = await Employer.create({ empId: finalEmpId, name, address, jobLocation, mouDate });
       res.status(201).json(created);
     } catch (e) {
       res.status(400).json({ message: e.message || 'Failed to create employer' });
@@ -228,12 +230,13 @@ router.post(
   authorize(R_WRITE),
   async (req, res) => {
     try {
-      const { position, employerId, salaryRange, deadline, status } = req.body;
+      const { jobId, position, employerId, salaryRange, deadline, status } = req.body;
       const employer = await Employer.findById(employerId);
       if (!employer) return res.status(400).json({ message: 'Invalid employer' });
-      const jobId = await nextId(Job, 'JOB');
+      // Use provided jobId or generate one if not provided
+      const finalJobId = jobId && jobId.trim() ? jobId.trim() : await nextId(Job, 'JOB');
       const created = await Job.create({
-        jobId, position, employer: employer._id, salaryRange, deadline, status
+        jobId: finalJobId, position, employer: employer._id, salaryRange, deadline, status
       });
       res.status(201).json(created);
     } catch (e) {
