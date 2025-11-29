@@ -254,7 +254,9 @@ router.post('/bulk-assign', requireAuth, authorize(['DigitalMarketing']), async 
 router.get('/:id/history', requireAuth, async (req, res) => {
   const lead = await Lead.findById(req.params.id)
     .populate('assignedTo', 'name email role')
-    .populate('assignedBy', 'name email role');
+    .populate('assignedBy', 'name email role')
+    .populate('admittedToCourse', 'name')
+    .populate('admittedToBatch', 'name');
   if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
 
   const role = req.user?.role;
