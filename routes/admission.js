@@ -140,6 +140,57 @@ router.patch('/leads/:id/status', requireAuth, async (req, res) => {
   return res.json({ lead });
 });
 
+// Add follow-up note (Admission only)
+router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
+  const { note, nextFollowUpDate } = req.body || {};
+  
+  if (!isAdmission(req.user)) {
+    return res.status(403).json({ code: 'FORBIDDEN', message: 'Only Admission can add follow-ups' });
+  }
+
+  const lead = await Lead.findById(req.params.id);
+  if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+
+  if (String(lead.assignedTo) !== String(req.user.id)) {
+    return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot add follow-up for unassigned lead' });
+  }
+
+  // Don't allow follow-ups on admitted or not admitted leads
+  if (lead.status === 'Admitted' || lead.status === 'Not Admitted') {
+    return res.status(400).json({ code: 'INVALID_STATE', message: 'Cannot add follow-up to admitted or rejected lead' });
+  }
+
+  // Add follow-up entry
+  lead.followUps = lead.followUps || [];
+  lead.followUps.push({ 
+    note: note ? String(note).trim() : '', 
+    at: new Date(), 
+    by: req.user.id 
+  });
+
+  // Update nextFollowUpDate if provided
+  if (nextFollowUpDate) {
+    lead.nextFollowUpDate = new Date(nextFollowUpDate);
+  }
+
+  // If not already in "In Follow Up" status, update it
+  if (lead.status !== 'In Follow Up') {
+    lead.status = 'In Follow Up';
+  }
+
+  await lead.save();
+
+  const populated = await Lead.findById(lead._id)
+    .populate('assignedTo', 'name email role')
+    .populate('assignedBy', 'name email role')
+    .populate('admittedToCourse', 'name')
+    .populate('admittedToBatch', 'name');
+  
+  await Lead.populate(populated, { path: 'followUps.by', select: 'name email' });
+
+  return res.json({ lead: populated });
+});
+
 // ---------- Fees Collection (Admission submit; Accountant approve in Phase 5) ----------
 
 // List fees: Admission sees own, Admin/SA/Accountant/Coordinator see all
