@@ -55,9 +55,9 @@ router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, re
 /**
  * Get Admission Targets with Achievement Status
  * GET /api/admission-targets?month=2025-11
- * Auth: Admin, SuperAdmin
+ * Auth: Admin, SuperAdmin, Admission
  */
-router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res) => {
+router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission']), async (req, res) => {
   try {
     const { month } = req.query;
 
@@ -83,12 +83,41 @@ router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res
         const endDate = new Date(startDate);
         endDate.setMonth(endDate.getMonth() + 1);
 
-        // Count leads admitted to this course in this month
-        const achieved = await Lead.countDocuments({
+        // Base query for counting admitted leads
+        const baseQuery = {
           admittedToCourse: target.course._id,
           status: 'Admitted',
           admittedAt: { $gte: startDate, $lt: endDate }
-        });
+        };
+
+        // For Admission role, calculate their own achievement and team total
+        if (req.user.role === 'Admission') {
+          // Own achievement
+          const ownAchieved = await Lead.countDocuments({
+            ...baseQuery,
+            assignedTo: req.user.id
+          });
+
+          // Team achievement (all Admission users)
+          const teamAchieved = await Lead.countDocuments(baseQuery);
+
+          return {
+            _id: target._id,
+            course: target.course,
+            month: target.month,
+            target: target.target,
+            achieved: ownAchieved,
+            teamAchieved: teamAchieved,
+            percentage: target.target > 0 ? Math.round((ownAchieved / target.target) * 100) : 0,
+            teamPercentage: target.target > 0 ? Math.round((teamAchieved / target.target) * 100) : 0,
+            setBy: target.setBy,
+            createdAt: target.createdAt,
+            updatedAt: target.updatedAt
+          };
+        }
+
+        // For Admin/SuperAdmin, show total achievement
+        const achieved = await Lead.countDocuments(baseQuery);
 
         return {
           _id: target._id,
