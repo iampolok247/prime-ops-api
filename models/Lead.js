@@ -26,6 +26,11 @@ const LeadSchema = new mongoose.Schema(
     admittedToBatch: { type: mongoose.Schema.Types.ObjectId, ref: 'Batch' }, // Batch they were admitted to
     notes: { type: String, default: '' },
     nextFollowUpDate: { type: Date }, // Next scheduled follow-up date
+    priority: { 
+      type: String, 
+      enum: ['Very Interested', 'Interested', 'Few Interested', 'Not Interested'],
+      default: 'Interested'
+    },
     // stage timestamps
     assignedAt: { type: Date },
     counselingAt: { type: Date },

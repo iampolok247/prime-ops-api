@@ -142,7 +142,7 @@ router.patch('/leads/:id/status', requireAuth, async (req, res) => {
 
 // Add follow-up note (Admission only)
 router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
-  const { note, nextFollowUpDate } = req.body || {};
+  const { note, nextFollowUpDate, priority } = req.body || {};
   
   if (!isAdmission(req.user)) {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Only Admission can add follow-ups' });
@@ -171,6 +171,11 @@ router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
   // Update nextFollowUpDate if provided
   if (nextFollowUpDate) {
     lead.nextFollowUpDate = new Date(nextFollowUpDate);
+  }
+
+  // Update priority if provided
+  if (priority) {
+    lead.priority = priority;
   }
 
   // If not already in "In Follow Up" status, update it
