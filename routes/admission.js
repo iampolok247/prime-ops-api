@@ -199,8 +199,10 @@ router.post('/fees', requireAuth, async (req, res) => {
   if (String(lead.assignedTo) !== String(req.user.id)) {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot submit fee for unassigned lead' });
   }
-  if (lead.status !== 'Admitted') {
-    return res.status(400).json({ code: 'INVALID_STATE', message: 'Lead must be Admitted' });
+  // Allow fee collection for leads that are NOT yet admitted
+  // Typical flow: Counseling → Interested → Pay Fees → Get Admitted
+  if (lead.status === 'Admitted') {
+    return res.status(400).json({ code: 'INVALID_STATE', message: 'Lead is already admitted. Use due collection for additional payments.' });
   }
 
   const row = await AdmissionFee.create({
