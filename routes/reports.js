@@ -115,6 +115,11 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
       { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
     ]);
 
+    console.log('[METRICS] targetUserId:', targetUserId);
+    console.log('[METRICS] dateRange:', { start, end });
+    console.log('[METRICS] counselingAgg result:', counselingAgg);
+    console.log('[METRICS] followAgg result:', followAgg);
+
     // Build result map per user id
     const map = new Map();
     counselingAgg.forEach(r => map.set(String(r._id || 'unassigned'), { counselingCount: r.count, followUpCount: 0 }));
