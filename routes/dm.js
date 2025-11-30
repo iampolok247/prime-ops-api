@@ -2,6 +2,7 @@ import express from "express";
 import { requireAuth } from "../middleware/auth.js";
 import { authorize } from "../middleware/authorize.js";
 import DMExpense from "../models/DMExpense.js";
+import DMCampaign from "../models/DMCampaign.js";
 import SocialMetrics from "../models/SocialMetrics.js";
 import SEOWork from "../models/SEOWork.js";
 
@@ -120,4 +121,177 @@ router.post(
   }
 );
 
-export default router;
+/** -------- DM Campaigns (Meta Ads / LinkedIn Ads) -------- */
+
+// List campaigns (filter by platform and date range)
+router.get(
+  "/campaigns",
+  requireAuth,
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  async (req, res) => {
+    try {
+      const { platform, from, to } = req.query;
+      const q = {};
+      if (platform && ['Meta Ads', 'LinkedIn Ads'].includes(platform)) {
+        q.platform = platform;
+      }
+      if (from || to) {
+        q.campaignDate = {};
+        if (from) q.campaignDate.$gte = new Date(from);
+        if (to) {
+          const toDate = new Date(to);
+          toDate.setHours(23, 59, 59, 999);
+          q.campaignDate.$lte = toDate;
+        }
+      }
+      const campaigns = await DMCampaign.find(q)
+        .populate('createdBy', 'name email')
+        .sort({ campaignDate: -1 });
+      return res.json({ campaigns });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// Create campaign
+router.post(
+  "/campaigns",
+  requireAuth,
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  async (req, res) => {
+    try {
+      const { campaignName, platform, boostType, cost, leads, postEngagements, thruPlays, impressions, reach, notes, campaignDate } = req.body || {};
+      
+      if (!campaignName || !platform || !boostType || cost === undefined) {
+        return res.status(400).json({ 
+          code: 'VALIDATION_ERROR', 
+          message: 'campaignName, platform, boostType, cost required' 
+        });
+      }
+
+      const campaign = await DMCampaign.create({
+        campaignName,
+        platform,
+        boostType,
+        cost: Number(cost),
+        leads: Number(leads) || 0,
+        postEngagements: Number(postEngagements) || 0,
+        thruPlays: Number(thruPlays) || 0,
+        impressions: Number(impressions) || 0,
+        reach: Number(reach) || 0,
+        notes: notes || '',
+        campaignDate: campaignDate ? new Date(campaignDate) : new Date(),
+        createdBy: req.user.id
+      });
+
+      const populated = await DMCampaign.findById(campaign._id).populate('createdBy', 'name email');
+      return res.status(201).json({ campaign: populated });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// Update campaign
+router.patch(
+  "/campaigns/:id",
+  requireAuth,
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  async (req, res) => {
+    try {
+      const { campaignName, platform, boostType, cost, leads, postEngagements, thruPlays, impressions, reach, notes, campaignDate } = req.body || {};
+      
+      const campaign = await DMCampaign.findById(req.params.id);
+      if (!campaign) {
+        return res.status(404).json({ code: 'NOT_FOUND', message: 'Campaign not found' });
+      }
+
+      if (campaignName !== undefined) campaign.campaignName = campaignName;
+      if (platform !== undefined) campaign.platform = platform;
+      if (boostType !== undefined) campaign.boostType = boostType;
+      if (cost !== undefined) campaign.cost = Number(cost);
+      if (leads !== undefined) campaign.leads = Number(leads);
+      if (postEngagements !== undefined) campaign.postEngagements = Number(postEngagements);
+      if (thruPlays !== undefined) campaign.thruPlays = Number(thruPlays);
+      if (impressions !== undefined) campaign.impressions = Number(impressions);
+      if (reach !== undefined) campaign.reach = Number(reach);
+      if (notes !== undefined) campaign.notes = notes;
+      if (campaignDate !== undefined) campaign.campaignDate = new Date(campaignDate);
+
+      await campaign.save();
+      const populated = await DMCampaign.findById(campaign._id).populate('createdBy', 'name email');
+      return res.json({ campaign: populated });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// Delete campaign
+router.delete(
+  "/campaigns/:id",
+  requireAuth,
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  async (req, res) => {
+    try {
+      const campaign = await DMCampaign.findByIdAndDelete(req.params.id);
+      if (!campaign) {
+        return res.status(404).json({ code: 'NOT_FOUND', message: 'Campaign not found' });
+      }
+      return res.json({ message: 'Campaign deleted', campaign });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// Get campaigns summary metrics
+router.get(
+  "/campaigns/summary/metrics",
+  requireAuth,
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  async (req, res) => {
+    try {
+      const { platform, from, to } = req.query;
+      const q = {};
+      if (platform && ['Meta Ads', 'LinkedIn Ads'].includes(platform)) {
+        q.platform = platform;
+      }
+      if (from || to) {
+        q.campaignDate = {};
+        if (from) q.campaignDate.$gte = new Date(from);
+        if (to) {
+          const toDate = new Date(to);
+          toDate.setHours(23, 59, 59, 999);
+          q.campaignDate.$lte = toDate;
+        }
+      }
+
+      const campaigns = await DMCampaign.find(q);
+      
+      const summary = {
+        totalCampaigns: campaigns.length,
+        totalCost: campaigns.reduce((sum, c) => sum + c.cost, 0),
+        totalLeads: campaigns.reduce((sum, c) => sum + c.leads, 0),
+        totalEngagements: campaigns.reduce((sum, c) => sum + c.postEngagements, 0),
+        totalThruPlays: campaigns.reduce((sum, c) => sum + c.thruPlays, 0),
+        totalImpressions: campaigns.reduce((sum, c) => sum + c.impressions, 0),
+        totalReach: campaigns.reduce((sum, c) => sum + c.reach, 0),
+        avgCostPerLead: 0,
+        avgCostPerEngagement: 0
+      };
+
+      if (summary.totalLeads > 0) {
+        summary.avgCostPerLead = (summary.totalCost / summary.totalLeads).toFixed(2);
+      }
+      if (summary.totalEngagements > 0) {
+        summary.avgCostPerEngagement = (summary.totalCost / summary.totalEngagements).toFixed(2);
+      }
+
+      return res.json({ summary });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
