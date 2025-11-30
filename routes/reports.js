@@ -97,10 +97,14 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     }
 
     const Lead = (await import('../models/Lead.js')).default;
+    const mongoose = (await import('mongoose')).default;
+
+    // Convert targetUserId to ObjectId if present (Mongoose aggregation needs proper ObjectId type)
+    const targetUserObjectId = targetUserId ? mongoose.Types.ObjectId.createFromHexString(targetUserId) : null;
 
     // Counseling count: leads with counselingAt in range and assignedTo matches (if provided)
     const counselingMatch = { counselingAt: { $gte: start, $lt: end } };
-    if (targetUserId) counselingMatch.assignedTo = targetUserId;
+    if (targetUserObjectId) counselingMatch.assignedTo = targetUserObjectId;
 
     const counselingAgg = await Lead.aggregate([
       { $match: counselingMatch },
@@ -111,11 +115,12 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     // NOTE: Must unwind FIRST, then match on followUps.at (can't match array element timing before unwind)
     const followAgg = await Lead.aggregate([
       { $unwind: '$followUps' },
-      { $match: { 'followUps.at': { $gte: start, $lt: end }, ...(targetUserId ? { assignedTo: targetUserId } : {}) } },
+      { $match: { 'followUps.at': { $gte: start, $lt: end }, ...(targetUserObjectId ? { assignedTo: targetUserObjectId } : {}) } },
       { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
     ]);
 
-    console.log('[METRICS] targetUserId:', targetUserId);
+    console.log('[METRICS] targetUserId (string):', targetUserId);
+    console.log('[METRICS] targetUserId (ObjectId):', targetUserObjectId);
     console.log('[METRICS] dateRange:', { start, end });
     console.log('[METRICS] counselingAgg result:', counselingAgg);
     console.log('[METRICS] followAgg result:', followAgg);
