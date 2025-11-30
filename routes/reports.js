@@ -108,13 +108,10 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     ]);
 
     // Follow-up count: unwind followUps and count entries with at in range and lead assignedTo matches
-    const followMatch = { 'followUps.at': { $gte: start, $lt: end } };
-    if (targetUserId) followMatch.assignedTo = targetUserId;
-
+    // NOTE: Must unwind FIRST, then match on followUps.at (can't match array element timing before unwind)
     const followAgg = await Lead.aggregate([
-      { $match: followMatch },
       { $unwind: '$followUps' },
-      { $match: { 'followUps.at': { $gte: start, $lt: end } } },
+      { $match: { 'followUps.at': { $gte: start, $lt: end }, ...(targetUserId ? { assignedTo: targetUserId } : {}) } },
       { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
     ]);
 
