@@ -169,3 +169,60 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
+
+/**
+ * DEBUG ENDPOINT: GET /api/reports/admission-metrics-debug?from=YYYY-MM-DD&to=YYYY-MM-DD
+ * Returns raw matched leads for inspection (counselingAt and followUps in range)
+ * Helps diagnose why aggregation returns zeros
+ */
+router.get('/admission-metrics-debug', requireAuth, async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const { start, end } = parseRange(from, to);
+    
+    const Lead = (await import('../models/Lead.js')).default;
+
+    // Find leads with counselingAt in range
+    const counselingLeads = await Lead.find({
+      assignedTo: req.user.id,
+      counselingAt: { $gte: start, $lt: end }
+    }).select('_id leadId name status counselingAt assignedTo');
+
+    // Find leads with followUps in range
+    const followUpLeads = await Lead.find({
+      assignedTo: req.user.id,
+      followUps: { $exists: true, $ne: [] }
+    }).select('_id leadId name status followUps');
+
+    const followUpLeadsInRange = followUpLeads.filter(lead => 
+      lead.followUps.some(fu => fu.at >= start && fu.at < end)
+    );
+
+    console.log(`[DEBUG] parseRange(${from}, ${to}) = [${start}, ${end})`);
+    console.log(`[DEBUG] Counseling leads found: ${counselingLeads.length}`);
+    console.log(`[DEBUG] Follow-up leads in range: ${followUpLeadsInRange.length}`);
+
+    return res.json({
+      range: { from: from || null, to: to || null, start: start.toISOString(), end: end.toISOString() },
+      counselingLeads: counselingLeads.map(l => ({
+        leadId: l.leadId,
+        status: l.status,
+        counselingAt: l.counselingAt
+      })),
+      followUpLeadsInRange: followUpLeadsInRange.map(l => ({
+        leadId: l.leadId,
+        status: l.status,
+        followUps: l.followUps.filter(fu => fu.at >= start && fu.at < end)
+      })),
+      summary: {
+        totalCounselingLeads: counselingLeads.length,
+        totalFollowUpLeads: followUpLeadsInRange.length,
+        parsedStart: start.toISOString(),
+        parsedEnd: end.toISOString()
+      }
+    });
+  } catch (e) {
+    console.error('Debug metrics error:', e);
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
