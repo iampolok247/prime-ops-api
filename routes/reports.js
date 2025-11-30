@@ -73,3 +73,99 @@ router.get('/overview', requireAuth, authorize(['SuperAdmin', 'Admin']), async (
 });
 
 export default router;
+
+/**
+ * GET /api/reports/admission-metrics?from=YYYY-MM-DD&to=YYYY-MM-DD&userId=...&format=csv
+ * Roles: Admission (own only), Admin, SuperAdmin
+ * Returns counts: counselingCount, followUpCount. If format=csv and requester is Admin/SuperAdmin, returns CSV.
+ */
+router.get('/admission-metrics', requireAuth, async (req, res) => {
+  try {
+    const { from, to, userId, format } = req.query;
+    const { start, end } = parseRange(from, to);
+
+    // Determine target user(s)
+    let targetUserId = null;
+    if (req.user.role === 'Admission') {
+      // Admission users can only request their own metrics
+      targetUserId = req.user.id;
+    } else if (req.user.role === 'Admin' || req.user.role === 'SuperAdmin') {
+      // Admins can request for specific user or all (no userId)
+      targetUserId = userId || null;
+    } else {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
+    }
+
+    const Lead = (await import('../models/Lead.js')).default;
+
+    // Counseling count: leads with counselingAt in range and assignedTo matches (if provided)
+    const counselingMatch = { counselingAt: { $gte: start, $lt: end } };
+    if (targetUserId) counselingMatch.assignedTo = targetUserId;
+
+    const counselingAgg = await Lead.aggregate([
+      { $match: counselingMatch },
+      { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
+    ]);
+
+    // Follow-up count: unwind followUps and count entries with at in range and lead assignedTo matches
+    const followMatch = { 'followUps.at': { $gte: start, $lt: end } };
+    if (targetUserId) followMatch.assignedTo = targetUserId;
+
+    const followAgg = await Lead.aggregate([
+      { $match: followMatch },
+      { $unwind: '$followUps' },
+      { $match: { 'followUps.at': { $gte: start, $lt: end } } },
+      { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
+    ]);
+
+    // Build result map per user id
+    const map = new Map();
+    counselingAgg.forEach(r => map.set(String(r._id || 'unassigned'), { counselingCount: r.count, followUpCount: 0 }));
+    followAgg.forEach(r => {
+      const key = String(r._id || 'unassigned');
+      const existing = map.get(key) || { counselingCount: 0, followUpCount: 0 };
+      existing.followUpCount = (existing.followUpCount || 0) + r.count;
+      map.set(key, existing);
+    });
+
+    // If targetUserId specified, return single object
+    if (targetUserId) {
+      const key = String(targetUserId);
+      const data = map.get(key) || { counselingCount: 0, followUpCount: 0 };
+      if (format === 'csv' && (req.user.role === 'Admin' || req.user.role === 'SuperAdmin')) {
+        // return CSV single row
+        const rows = ['userId,counselingCount,followUpCount', `${key},${data.counselingCount},${data.followUpCount}`];
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename="admission-metrics-${key}.csv"`);
+        return res.send(rows.join('\n'));
+      }
+      return res.json({ userId: key, ...data, range: { from: from || null, to: to || null } });
+    }
+
+    // For admin: return array of user metrics. Need to populate user names
+    const userIds = Array.from(map.keys()).filter(k => k !== 'unassigned');
+    const users = await (await import('../models/User.js')).default.find({ _id: { $in: userIds } }).select('name role');
+    const usersById = {};
+    users.forEach(u => { usersById[String(u._id)] = u; });
+
+    const results = [];
+    for (const [key, val] of map.entries()) {
+      if (key === 'unassigned') continue;
+      results.push({ userId: key, userName: usersById[key]?.name || null, ...val });
+    }
+
+    if (format === 'csv') {
+      // generate CSV
+      const header = ['userId,userName,counselingCount,followUpCount'];
+      const rows = results.map(r => `${r.userId},"${(r.userName||'').replace(/"/g,'""')}",${r.counselingCount},${r.followUpCount}`);
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="admission-metrics-${from||'all'}-${to||'all'}.csv"`);
+      return res.send([header.join(','), ...rows].join('\n'));
+    }
+
+    return res.json({ range: { from: from || null, to: to || null }, metrics: results });
+  } catch (e) {
+    console.error('Admission metrics error:', e);
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
