@@ -15,10 +15,45 @@ const router = Router();
 // helpers
 function parseRange(from, to) {
   const today = new Date();
-  const start = from ? new Date(from) : new Date(today.getFullYear(), today.getMonth(), 1);
-  const end = to ? new Date(to) : new Date(today.getFullYear(), today.getMonth() + 1, 1);
-  // ensure end is exclusive
-  const endExclusive = new Date(end.getFullYear(), end.getMonth(), end.getDate() + 1);
+  today.setHours(0, 0, 0, 0); // Start of today
+  
+  // If both from and to are provided, use them
+  if (from && to) {
+    const start = new Date(from);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(to);
+    end.setHours(23, 59, 59, 999);
+    // Convert end to exclusive (next day at 00:00)
+    const endExclusive = new Date(end);
+    endExclusive.setDate(endExclusive.getDate() + 1);
+    endExclusive.setHours(0, 0, 0, 0);
+    return { start, end: endExclusive };
+  }
+  
+  // If only from is provided, use from to today (inclusive)
+  if (from) {
+    const start = new Date(from);
+    start.setHours(0, 0, 0, 0);
+    const endExclusive = new Date(today);
+    endExclusive.setDate(endExclusive.getDate() + 1);
+    return { start, end: endExclusive };
+  }
+  
+  // If only to is provided, use to to today (inclusive)
+  if (to) {
+    const end = new Date(to);
+    end.setHours(23, 59, 59, 999);
+    const endExclusive = new Date(end);
+    endExclusive.setDate(endExclusive.getDate() + 1);
+    endExclusive.setHours(0, 0, 0, 0);
+    const start = new Date(today.getFullYear(), today.getMonth(), 1);
+    return { start, end: endExclusive };
+  }
+  
+  // Default: month to date (first day of current month to today inclusive)
+  const start = new Date(today.getFullYear(), today.getMonth(), 1);
+  const endExclusive = new Date(today);
+  endExclusive.setDate(endExclusive.getDate() + 1);
   return { start, end: endExclusive };
 }
 
