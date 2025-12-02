@@ -17,9 +17,15 @@ const CounterSchema = new mongoose.Schema({
 
 const Counter = mongoose.model('Counter', CounterSchema);
 
-// Initialize counter based on existing leads in database
-const initializeCounter = async (year) => {
-  const counterKey = `lead-${year}`;
+// Get first 3 letters of course name (uppercase)
+const getCourseInitials = (courseName) => {
+  if (!courseName) return 'GEN';
+  return courseName.substring(0, 3).toUpperCase();
+};
+
+// Initialize counter based on existing leads in database for a specific course
+const initializeCounter = async (year, courseInitials) => {
+  const counterKey = `lead-${year}-${courseInitials}`;
   
   try {
     // Check if counter already exists
@@ -28,15 +34,15 @@ const initializeCounter = async (year) => {
       return; // Already initialized
     }
 
-    // Find the highest leadId in the database for this year
+    // Find the highest leadId in the database for this year and course
     const highestLead = await Lead.findOne(
-      { leadId: new RegExp(`^LEAD-${year}-`) },
+      { leadId: new RegExp(`^LEAD-${year}-${courseInitials}-`) },
       { leadId: 1 }
     ).sort({ leadId: -1 });
 
     let maxSeq = 0;
     if (highestLead) {
-      // Extract sequence number from leadId (e.g., "LEAD-2025-0654" → 654)
+      // Extract sequence number from leadId (e.g., "LEAD-2025-PCC-0654" → 654)
       const parts = highestLead.leadId.split('-');
       const seqStr = parts[parts.length - 1];
       maxSeq = parseInt(seqStr) || 0;
@@ -48,19 +54,20 @@ const initializeCounter = async (year) => {
       seq: maxSeq
     });
 
-    console.log(`✅ Counter initialized for ${year}: starting at ${maxSeq + 1}`);
+    console.log(`✅ Counter initialized for ${year}-${courseInitials}: starting at ${maxSeq + 1}`);
   } catch (e) {
-    console.error(`⚠️ Error initializing counter for ${year}:`, e.message);
+    console.error(`⚠️ Error initializing counter for ${year}-${courseInitials}:`, e.message);
   }
 };
 
-const genLeadId = async () => {
+const genLeadId = async (courseName = 'General') => {
   const y = new Date().getFullYear();
-  const counterKey = `lead-${y}`;
+  const courseInitials = getCourseInitials(courseName);
+  const counterKey = `lead-${y}-${courseInitials}`;
   
   try {
     // Initialize counter if needed
-    await initializeCounter(y);
+    await initializeCounter(y, courseInitials);
 
     // Atomic increment using findByIdAndUpdate
     const counter = await Counter.findByIdAndUpdate(
@@ -68,14 +75,14 @@ const genLeadId = async () => {
       { $inc: { seq: 1 } },
       { new: true, upsert: true }
     );
-    const n = counter.seq.toString().padStart(4, '0');
-    return `LEAD-${y}-${n}`;
+    const n = counter.seq.toString().padStart(5, '0');
+    return `LEAD-${y}-${courseInitials}-${n}`;
   } catch (e) {
     console.error('Error generating lead ID:', e);
     // Fallback: use timestamp + random for safety
     const timestamp = Date.now();
     const random = Math.floor(Math.random() * 10000);
-    return `LEAD-${y}-${timestamp}${random}`.slice(0, 13);
+    return `LEAD-${y}-${courseInitials}-${timestamp}${random}`.slice(0, 20);
   }
 };
 
@@ -103,7 +110,7 @@ router.post('/', requireAuth, authorize(['DigitalMarketing']), async (req, res) 
   if (dup) return res.status(409).json({ code: 'DUPLICATE', message: 'Duplicate phone/email in recent leads' });
 
   const lead = await Lead.create({
-    leadId: await genLeadId(),
+    leadId: await genLeadId(interestedCourse),
     name, phone, email, interestedCourse, source,
     status: 'Assigned',
     assignedBy: req.user.id
@@ -180,7 +187,7 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
       }
 
       await Lead.create({
-        leadId: await genLeadId(),
+        leadId: await genLeadId(interestedCourse),
         name, phone, email, interestedCourse, source,
         status: 'Assigned',
         assignedBy: req.user.id
