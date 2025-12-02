@@ -17,11 +17,51 @@ const CounterSchema = new mongoose.Schema({
 
 const Counter = mongoose.model('Counter', CounterSchema);
 
+// Initialize counter based on existing leads in database
+const initializeCounter = async (year) => {
+  const counterKey = `lead-${year}`;
+  
+  try {
+    // Check if counter already exists
+    const existingCounter = await Counter.findById(counterKey);
+    if (existingCounter) {
+      return; // Already initialized
+    }
+
+    // Find the highest leadId in the database for this year
+    const highestLead = await Lead.findOne(
+      { leadId: new RegExp(`^LEAD-${year}-`) },
+      { leadId: 1 }
+    ).sort({ leadId: -1 });
+
+    let maxSeq = 0;
+    if (highestLead) {
+      // Extract sequence number from leadId (e.g., "LEAD-2025-0654" → 654)
+      const parts = highestLead.leadId.split('-');
+      const seqStr = parts[parts.length - 1];
+      maxSeq = parseInt(seqStr) || 0;
+    }
+
+    // Create counter with the next sequence number
+    await Counter.create({
+      _id: counterKey,
+      seq: maxSeq
+    });
+
+    console.log(`✅ Counter initialized for ${year}: starting at ${maxSeq + 1}`);
+  } catch (e) {
+    console.error(`⚠️ Error initializing counter for ${year}:`, e.message);
+  }
+};
+
 const genLeadId = async () => {
   const y = new Date().getFullYear();
   const counterKey = `lead-${y}`;
   
   try {
+    // Initialize counter if needed
+    await initializeCounter(y);
+
     // Atomic increment using findByIdAndUpdate
     const counter = await Counter.findByIdAndUpdate(
       counterKey,
