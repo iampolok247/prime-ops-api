@@ -1,5 +1,6 @@
 import express from 'express';
 import TADAApplication from '../models/TADAApplication.js';
+import Notification from '../models/Notification.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
 
@@ -193,6 +194,22 @@ router.patch('/:id/request-details', requireAuth, authorize(['Admin']), async (r
       .populate('adminReviewedBy', 'name email role')
       .populate('paidBy', 'name email role')
       .populate('detailsRequestedBy', 'name email role');
+
+    // Create notification for the employee
+    try {
+      await Notification.create({
+        recipient: application.employee,
+        sender: req.user.id,
+        type: 'TADA_DETAILS_REQUESTED',
+        title: 'More Details Needed for TA/DA Application',
+        message: `${req.user.name} has requested more information: ${detailsRequested}`,
+        link: `/my-applications`,
+        relatedModel: 'TADAApplication',
+        relatedId: application._id
+      });
+    } catch (notifError) {
+      console.error('❌ Failed to create notification:', notifError);
+    }
 
     return res.json({ application: populated });
   } catch (e) {
