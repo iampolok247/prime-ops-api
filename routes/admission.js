@@ -72,8 +72,18 @@ router.patch('/leads/:id/status', requireAuth, async (req, res) => {
 
   // Update timestamps / follow-ups appropriately
   if (status === 'Counseling') {
-    // mark counseling time if moving to Counseling
-    lead.counselingAt = lead.counselingAt || new Date();
+    // mark counseling time - UPDATE it every time (don't use || to preserve old value)
+    lead.counselingAt = new Date();
+    
+    // Log this counseling action for metrics tracking
+    const LeadActivity = (await import('../models/LeadActivity.js')).default;
+    await LeadActivity.create({
+      lead: lead._id,
+      advisor: req.user.id,
+      activityType: 'counseling',
+      actionDate: new Date(),
+      note: notes || ''
+    });
   }
 
   if (status === 'Admitted') {
@@ -108,6 +118,16 @@ router.patch('/leads/:id/status', requireAuth, async (req, res) => {
         }
       }
     }
+    
+    // Log this admitted action for metrics tracking
+    const LeadActivity = (await import('../models/LeadActivity.js')).default;
+    await LeadActivity.create({
+      lead: lead._id,
+      advisor: req.user.id,
+      activityType: 'admitted',
+      actionDate: new Date(),
+      note: notes || ''
+    });
   }
 
   if (status === 'In Follow Up') {
@@ -129,6 +149,16 @@ router.patch('/leads/:id/status', requireAuth, async (req, res) => {
       lead.followUps = lead.followUps || [];
       lead.followUps.push({ note: `Not Admitted: ${String(notes).trim()}`, at: new Date(), by: req.user.id });
     }
+    
+    // Log this not admitted action for metrics tracking
+    const LeadActivity = (await import('../models/LeadActivity.js')).default;
+    await LeadActivity.create({
+      lead: lead._id,
+      advisor: req.user.id,
+      activityType: 'not_admitted',
+      actionDate: new Date(),
+      note: notes || ''
+    });
   }
 
   lead.status = status;
@@ -166,6 +196,16 @@ router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
     note: note ? String(note).trim() : '', 
     at: new Date(), 
     by: req.user.id 
+  });
+
+  // Log this follow-up action for metrics tracking
+  const LeadActivity = (await import('../models/LeadActivity.js')).default;
+  await LeadActivity.create({
+    lead: lead._id,
+    advisor: req.user.id,
+    activityType: 'follow_up',
+    actionDate: new Date(),
+    note: note ? String(note).trim() : ''
   });
 
   // Update nextFollowUpDate if provided
