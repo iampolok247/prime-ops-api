@@ -46,7 +46,8 @@ router.get('/my-applications', requireAuth, async (req, res) => {
       .sort({ createdAt: -1 })
       .populate('employee', 'name email role')
       .populate('adminReviewedBy', 'name email role')
-      .populate('paidBy', 'name email role');
+      .populate('paidBy', 'name email role')
+      .populate('detailsRequestedBy', 'name email role');
 
     return res.json({ applications });
   } catch (e) {
@@ -65,7 +66,8 @@ router.get('/admin', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req
       .sort({ createdAt: -1 })
       .populate('employee', 'name email role')
       .populate('adminReviewedBy', 'name email role')
-      .populate('paidBy', 'name email role');
+      .populate('paidBy', 'name email role')
+      .populate('detailsRequestedBy', 'name email role');
 
     return res.json({ applications });
   } catch (e) {
@@ -155,6 +157,42 @@ router.patch('/:id/reject', requireAuth, authorize(['Admin']), async (req, res) 
       .populate('employee', 'name email role')
       .populate('adminReviewedBy', 'name email role')
       .populate('paidBy', 'name email role');
+
+    return res.json({ application: populated });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// Admin: Request more details for TA/DA application
+router.patch('/:id/request-details', requireAuth, authorize(['Admin']), async (req, res) => {
+  try {
+    const { detailsRequested } = req.body;
+    const application = await TADAApplication.findById(req.params.id);
+
+    if (!application) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'Application not found' });
+    }
+
+    if (application.adminStatus !== 'Pending') {
+      return res.status(400).json({ code: 'ALREADY_REVIEWED', message: 'Application already reviewed' });
+    }
+
+    if (!detailsRequested) {
+      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Details request message is required' });
+    }
+
+    application.detailsRequested = detailsRequested;
+    application.detailsRequestedAt = new Date();
+    application.detailsRequestedBy = req.user.id;
+
+    await application.save();
+
+    const populated = await TADAApplication.findById(application._id)
+      .populate('employee', 'name email role')
+      .populate('adminReviewedBy', 'name email role')
+      .populate('paidBy', 'name email role')
+      .populate('detailsRequestedBy', 'name email role');
 
     return res.json({ application: populated });
   } catch (e) {

@@ -66,6 +66,16 @@ const TADAApplicationSchema = new mongoose.Schema(
     },
     paymentNote: { 
       type: String 
+    },
+    detailsRequested: {
+      type: String
+    },
+    detailsRequestedAt: {
+      type: Date
+    },
+    detailsRequestedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
     }
   },
   { timestamps: true }

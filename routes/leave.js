@@ -148,7 +148,8 @@ router.get('/my-applications', requireAuth, async (req, res) => {
       .sort({ createdAt: -1 })
       .populate('employee', 'name email role')
       .populate('handoverTo', 'name email role')
-      .populate('reviewedBy', 'name email role');
+      .populate('reviewedBy', 'name email role')
+      .populate('detailsRequestedBy', 'name email role');
 
     return res.json({ applications });
   } catch (e) {
@@ -311,7 +312,8 @@ router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res
       .sort({ createdAt: -1 })
       .populate('employee', 'name email role')
       .populate('handoverTo', 'name email role')
-      .populate('reviewedBy', 'name email role');
+      .populate('reviewedBy', 'name email role')
+      .populate('detailsRequestedBy', 'name email role');
 
     return res.json({ applications });
   } catch (e) {
@@ -415,6 +417,60 @@ router.patch('/:id/reject', requireAuth, authorize(['Admin']), async (req, res) 
       console.log('✅ Rejection notification sent successfully');
     } catch (notifError) {
       console.error('❌ Failed to send rejection notification:', notifError);
+    }
+
+    return res.json({ application: populated });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// Admin: Request more details for leave application
+router.patch('/:id/request-details', requireAuth, authorize(['Admin']), async (req, res) => {
+  try {
+    const { detailsRequested } = req.body;
+    const application = await LeaveApplication.findById(req.params.id);
+
+    if (!application) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'Application not found' });
+    }
+
+    if (application.status !== 'Pending') {
+      return res.status(400).json({ code: 'ALREADY_REVIEWED', message: 'Application already reviewed' });
+    }
+
+    if (!detailsRequested) {
+      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Details request message is required' });
+    }
+
+    application.detailsRequested = detailsRequested;
+    application.detailsRequestedAt = new Date();
+    application.detailsRequestedBy = req.user.id;
+
+    await application.save();
+
+    const populated = await LeaveApplication.findById(application._id)
+      .populate('employee', 'name email role')
+      .populate('handoverTo', 'name email role')
+      .populate('reviewedBy', 'name email role')
+      .populate('detailsRequestedBy', 'name email role');
+
+    // Notify the employee
+    try {
+      console.log('📢 Creating details request notification for employee:', populated.employee.name, application.employee);
+      await createNotification({
+        recipient: application.employee,
+        sender: req.user.id,
+        type: 'LEAVE_DETAILS_REQUESTED',
+        title: 'More Details Needed for Leave Application',
+        message: `${req.user.name} has requested more information: ${detailsRequested}`,
+        link: `/my-applications`,
+        relatedModel: 'LeaveApplication',
+        relatedId: application._id
+      });
+      console.log('✅ Details request notification sent successfully');
+    } catch (notifError) {
+      console.error('❌ Failed to send details request notification:', notifError);
     }
 
     return res.json({ application: populated });

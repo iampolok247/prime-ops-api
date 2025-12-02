@@ -60,6 +60,16 @@ const LeaveApplicationSchema = new mongoose.Schema(
     },
     reviewNote: { 
       type: String 
+    },
+    detailsRequested: {
+      type: String
+    },
+    detailsRequestedAt: {
+      type: Date
+    },
+    detailsRequestedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
     }
   },
   { timestamps: true }
