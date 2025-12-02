@@ -141,10 +141,18 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     const counselingMatch = { counselingAt: { $gte: start, $lt: end } };
     if (targetUserObjectId) counselingMatch.assignedTo = targetUserObjectId;
 
+    console.log('[METRICS] counselingMatch:', counselingMatch);
     const counselingAgg = await Lead.aggregate([
       { $match: counselingMatch },
       { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
     ]);
+    
+    // Debug: also show all leads for this user to check timestamps
+    const debugLeads = await Lead.find({
+      assignedTo: targetUserObjectId,
+      counselingAt: { $exists: true }
+    }).select('leadId counselingAt').limit(3);
+    console.log('[METRICS] Sample leads with counselingAt:', debugLeads.map(l => ({ leadId: l.leadId, counselingAt: l.counselingAt?.toISOString() })));
 
     // Follow-up count: unwind followUps and count entries with at in range and lead assignedTo matches
     // NOTE: Must unwind FIRST, then match on followUps.at (can't match array element timing before unwind)
@@ -154,9 +162,10 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
       { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
     ]);
 
+    console.log('[METRICS] Query params: from=%s, to=%s', from, to);
+    console.log('[METRICS] Parsed dateRange:', { start: start.toISOString(), end: end.toISOString() });
     console.log('[METRICS] targetUserId (string):', targetUserId);
     console.log('[METRICS] targetUserId (ObjectId):', targetUserObjectId);
-    console.log('[METRICS] dateRange:', { start, end });
     console.log('[METRICS] counselingAgg result:', counselingAgg);
     console.log('[METRICS] followAgg result:', followAgg);
 
