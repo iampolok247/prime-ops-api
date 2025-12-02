@@ -7,11 +7,36 @@ import { authorize } from '../middleware/authorize.js';
 
 const router = express.Router();
 
+// Atomic counter collection for generating unique IDs
+import mongoose from 'mongoose';
+
+const CounterSchema = new mongoose.Schema({
+  _id: { type: String, required: true },
+  seq: { type: Number, default: 0 }
+});
+
+const Counter = mongoose.model('Counter', CounterSchema);
+
 const genLeadId = async () => {
   const y = new Date().getFullYear();
-  const count = await Lead.countDocuments({ leadId: new RegExp(`^LEAD-${y}-`) });
-  const n = (count + 1).toString().padStart(4, '0');
-  return `LEAD-${y}-${n}`;
+  const counterKey = `lead-${y}`;
+  
+  try {
+    // Atomic increment using findByIdAndUpdate
+    const counter = await Counter.findByIdAndUpdate(
+      counterKey,
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true }
+    );
+    const n = counter.seq.toString().padStart(4, '0');
+    return `LEAD-${y}-${n}`;
+  } catch (e) {
+    console.error('Error generating lead ID:', e);
+    // Fallback: use timestamp + random for safety
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 10000);
+    return `LEAD-${y}-${timestamp}${random}`.slice(0, 13);
+  }
 };
 
 // Create single lead (DM only)
