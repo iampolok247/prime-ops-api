@@ -190,6 +190,9 @@ router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
     return res.status(400).json({ code: 'INVALID_STATE', message: 'Cannot add follow-up to admitted or rejected lead' });
   }
 
+  // Check if this is the first follow-up or a subsequent one
+  const isFirstFollowUp = lead.status !== 'In Follow Up' && (!lead.followUps || lead.followUps.length === 0);
+
   // Add follow-up entry
   lead.followUps = lead.followUps || [];
   lead.followUps.push({ 
@@ -198,15 +201,18 @@ router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
     by: req.user.id 
   });
 
-  // Log this follow-up action for metrics tracking
-  const LeadActivity = (await import('../models/LeadActivity.js')).default;
-  await LeadActivity.create({
-    lead: lead._id,
-    advisor: req.user.id,
-    activityType: 'follow_up',
-    actionDate: new Date(),
-    note: note ? String(note).trim() : ''
-  });
+  // Log this follow-up action for metrics tracking ONLY if it's a subsequent follow-up (Follow-Up Again)
+  // Don't log the first follow-up as it's just moving from Counseling to In Follow Up
+  if (!isFirstFollowUp) {
+    const LeadActivity = (await import('../models/LeadActivity.js')).default;
+    await LeadActivity.create({
+      lead: lead._id,
+      advisor: req.user.id,
+      activityType: 'follow_up',
+      actionDate: new Date(),
+      note: note ? String(note).trim() : ''
+    });
+  }
 
   // Update nextFollowUpDate if provided
   if (nextFollowUpDate) {
