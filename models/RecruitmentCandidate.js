@@ -10,6 +10,8 @@ const RecruitedMetaSchema = new mongoose.Schema({
 const RecruitmentCandidateSchema = new mongoose.Schema({
   canId: { type: String, required: true, unique: true, index: true },
   name: { type: String, required: true, trim: true },
+  phone: { type: String, required: true, trim: true },
+  email: { type: String, trim: true },
   jobInterest: { type: String, required: true, trim: true },
   source: {
     type: String,

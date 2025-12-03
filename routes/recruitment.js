@@ -89,11 +89,11 @@ router.post(
   authorize(R_WRITE),
   async (req, res) => {
     try {
-      const { canId, name, jobInterest, source, district, trained, cvLink, date } = req.body;
+      const { canId, name, phone, email, jobInterest, source, district, trained, cvLink, date } = req.body;
       // Use provided canId or generate one if not provided
       const finalCanId = canId && canId.trim() ? canId.trim() : await nextId(Candidate, 'CAN');
       const created = await Candidate.create({
-        canId: finalCanId, name, jobInterest, source, district, trained, cvLink, date
+        canId: finalCanId, name, phone, email, jobInterest, source, district, trained, cvLink, date
       });
       res.status(201).json(created);
     } catch (e) {
