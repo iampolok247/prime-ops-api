@@ -16,7 +16,7 @@ const LeadSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ['Assigned', 'Counseling', 'In Follow Up', 'Admitted', 'Not Admitted', 'Interested'],
+      enum: ['Assigned', 'Counseling', 'In Follow Up', 'Admitted', 'Not Admitted', 'Not Interested'],
       default: 'Assigned'
     },
 

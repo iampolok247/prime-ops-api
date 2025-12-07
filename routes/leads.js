@@ -349,7 +349,7 @@ router.get('/:id/history', requireAuth, async (req, res) => {
 // Update status (DM only for now; Phase 4: Admission will change from their side)
 router.patch('/:id/status', requireAuth, authorize(['DigitalMarketing']), async (req, res) => {
   const { status, notes } = req.body || {};
-  const allowed = ['Assigned', 'Counseling', 'In Follow Up', 'Admitted', 'Not Admitted', 'Interested'];
+  const allowed = ['Assigned', 'Counseling', 'In Follow Up', 'Admitted', 'Not Admitted', 'Not Interested'];
   if (!allowed.includes(status)) {
     return res.status(400).json({ code: 'INVALID_STATUS', message: 'Invalid status' });
   }

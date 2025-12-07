@@ -32,12 +32,12 @@ router.get('/leads', requireAuth, async (req, res) => {
 
 // Allowed transitions
 // Assigned -> Counseling
-// Counseling -> Admitted | In Follow Up | Not Admitted
-// In Follow Up -> Admitted | Not Admitted
+// Counseling -> Admitted | In Follow Up | Not Interested
+// In Follow Up -> Admitted | Not Interested
 // Some environments/proxies block PATCH, so provide a POST alias to the same handler
 async function updateLeadStatusHandler(req, res) {
   const { status, notes, courseId, batchId, nextFollowUpDate } = req.body || {};
-  const allowed = ['Counseling', 'Admitted', 'In Follow Up', 'Not Admitted'];
+  const allowed = ['Counseling', 'Admitted', 'In Follow Up', 'Not Interested'];
   if (!allowed.includes(status)) {
     return res.status(400).json({ code: 'INVALID_STATUS', message: 'Invalid target status' });
   }
@@ -56,8 +56,8 @@ async function updateLeadStatusHandler(req, res) {
   const from = lead.status;
   let ok =
     (from === 'Assigned' && status === 'Counseling') ||
-    (from === 'Counseling' && ['Admitted', 'In Follow Up', 'Not Admitted'].includes(status)) ||
-    (from === 'In Follow Up' && ['Admitted', 'Not Admitted'].includes(status));
+    (from === 'Counseling' && ['Admitted', 'In Follow Up', 'Not Interested'].includes(status)) ||
+    (from === 'In Follow Up' && ['Admitted', 'Not Interested'].includes(status));
 
   // Special case: allow adding an additional follow-up (notes) while already in 'In Follow Up'
   // without requiring a status change. This enables the frontend "Follow-Up Again" flow.
@@ -144,11 +144,11 @@ async function updateLeadStatusHandler(req, res) {
     }
   }
 
-  if (status === 'Not Admitted') {
+  if (status === 'Not Interested') {
     // if a reason/notes provided when marking Not Admitted, store it as a follow-up entry
     if (notes && String(notes).trim().length > 0) {
       lead.followUps = lead.followUps || [];
-      lead.followUps.push({ note: `Not Admitted: ${String(notes).trim()}`, at: new Date(), by: req.user.id });
+      lead.followUps.push({ note: `Not Interested: ${String(notes).trim()}`, at: new Date(), by: req.user.id });
     }
     
     // Log this not admitted action for metrics tracking
@@ -156,7 +156,7 @@ async function updateLeadStatusHandler(req, res) {
     await LeadActivity.create({
       lead: lead._id,
       advisor: req.user.id,
-      activityType: 'not_admitted',
+      activityType: 'not_interested',
       actionDate: new Date(),
       note: notes || ''
     });
