@@ -26,6 +26,7 @@ import coordinatorRoutes from "./routes/coordinator.js";
 import leaveRoutes from "./routes/leave.js";
 import tadaRoutes from "./routes/tada.js";
 import notificationRoutes from "./routes/notifications.js";
+import bankRoutes from "./routes/bank.js";
 
 dotenv.config();
 
@@ -80,6 +81,7 @@ app.use("/api/leave", leaveRoutes);
 app.use("/api/tada", tadaRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/recruitment", recruitmentRoutes);
+app.use("/api/bank", bankRoutes);
 
 // ---------- 404 Handler ----------
 app.use((req, res) => {
