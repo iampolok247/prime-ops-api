@@ -199,6 +199,29 @@ router.post('/income', requireAuth, authorize(onlyAcc), async (req, res) => {
   res.status(201).json({ income: row });
 });
 
+router.put('/income/:id', requireAuth, authorize(onlyAcc), async (req, res) => {
+  const { date, source, amount, note } = req.body || {};
+  if (!date || !source || amount === undefined) {
+    return res.status(400).json({ code:'VALIDATION_ERROR', message:'date, source, amount required' });
+  }
+  const row = await Income.findById(req.params.id);
+  if (!row) return res.status(404).json({ code:'NOT_FOUND', message:'Income not found' });
+  
+  row.date = new Date(date);
+  row.source = source;
+  row.amount = Number(amount);
+  row.note = note || '';
+  await row.save();
+  res.json({ income: row });
+});
+
+router.delete('/income/:id', requireAuth, authorize(onlyAcc), async (req, res) => {
+  const row = await Income.findById(req.params.id);
+  if (!row) return res.status(404).json({ code:'NOT_FOUND', message:'Income not found' });
+  await row.deleteOne();
+  res.json({ ok: true });
+});
+
 // ---------- Expense ----------
 
 router.get('/expense', requireAuth, authorize(accOrAdmin), async (req, res) => {
@@ -219,6 +242,22 @@ router.post('/expense', requireAuth, authorize(onlyAcc), async (req, res) => {
     note: note || ''
   });
   res.status(201).json({ expense: row });
+});
+
+router.put('/expense/:id', requireAuth, authorize(onlyAcc), async (req, res) => {
+  const { date, purpose, amount, note } = req.body || {};
+  if (!date || !purpose || amount === undefined) {
+    return res.status(400).json({ code:'VALIDATION_ERROR', message:'date, purpose, amount required' });
+  }
+  const row = await Expense.findById(req.params.id);
+  if (!row) return res.status(404).json({ code:'NOT_FOUND', message:'Expense not found' });
+  
+  row.date = new Date(date);
+  row.purpose = purpose;
+  row.amount = Number(amount);
+  row.note = note || '';
+  await row.save();
+  res.json({ expense: row });
 });
 
 router.delete('/expense/:id', requireAuth, authorize(onlyAcc), async (req, res) => {
