@@ -168,7 +168,7 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     ]);
 
     const notAdmittedAgg = await LeadActivity.aggregate([
-      { $match: { ...baseMatch, activityType: 'not_admitted' } },
+      { $match: { ...baseMatch, activityType: { $in: ['not_admitted','not_interested'] } } },
       { $group: { _id: '$advisor', count: { $sum: 1 } } }
     ]);
 
