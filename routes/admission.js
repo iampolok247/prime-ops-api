@@ -34,7 +34,8 @@ router.get('/leads', requireAuth, async (req, res) => {
 // Assigned -> Counseling
 // Counseling -> Admitted | In Follow Up | Not Admitted
 // In Follow Up -> Admitted | Not Admitted
-router.patch('/leads/:id/status', requireAuth, async (req, res) => {
+// Some environments/proxies block PATCH, so provide a POST alias to the same handler
+async function updateLeadStatusHandler(req, res) {
   const { status, notes, courseId, batchId, nextFollowUpDate } = req.body || {};
   const allowed = ['Counseling', 'Admitted', 'In Follow Up', 'Not Admitted'];
   if (!allowed.includes(status)) {
@@ -168,7 +169,10 @@ router.patch('/leads/:id/status', requireAuth, async (req, res) => {
   await Lead.populate(lead, { path: 'followUps.by', select: 'name email' });
 
   return res.json({ lead });
-});
+}
+
+router.patch('/leads/:id/status', requireAuth, updateLeadStatusHandler);
+router.post('/leads/:id/status', requireAuth, updateLeadStatusHandler);
 
 // Add follow-up note (Admission only)
 router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
