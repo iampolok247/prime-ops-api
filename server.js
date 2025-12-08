@@ -39,9 +39,14 @@ app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
 
 // ---------- CORS ----------
+// In development, allow localhost on any port. In production, allow same origin.
+const corsOrigin = process.env.NODE_ENV === 'development' 
+  ? ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
+  : true;
+
 app.use(
   cors({
-    origin: true, // Allow all origins for now to debug
+    origin: corsOrigin,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: [

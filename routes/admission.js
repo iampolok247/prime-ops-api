@@ -36,14 +36,24 @@ router.get('/leads', requireAuth, async (req, res) => {
 // In Follow Up -> Admitted | Not Interested
 // Some environments/proxies block PATCH, so provide a POST alias to the same handler
 async function updateLeadStatusHandler(req, res) {
+  console.log('=== UPDATE LEAD STATUS HANDLER ===');
+  console.log('Lead ID:', req.params.id);
+  console.log('Request body:', req.body);
+  console.log('User:', req.user?.name, req.user?.role);
+  
   const { status, notes, courseId, batchId, nextFollowUpDate } = req.body || {};
   const allowed = ['Counseling', 'Admitted', 'In Follow Up', 'Not Interested'];
   if (!allowed.includes(status)) {
+    console.log('ERROR: Invalid status:', status);
     return res.status(400).json({ code: 'INVALID_STATUS', message: 'Invalid target status' });
   }
 
   const lead = await Lead.findById(req.params.id);
-  if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+  if (!lead) {
+    console.log('ERROR: Lead not found:', req.params.id);
+    return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+  }
+  console.log('Lead found:', lead.leadId, 'Current status:', lead.status);
 
   // Admission can only move own leads; Admin/SA can move any
   if (isAdmission(req.user) && String(lead.assignedTo) !== String(req.user.id)) {

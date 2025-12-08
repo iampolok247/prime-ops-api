@@ -6,7 +6,7 @@ const LeadActivitySchema = new mongoose.Schema(
     advisor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     activityType: {
       type: String,
-      enum: ['counseling', 'follow_up'],
+      enum: ['counseling', 'follow_up', 'not_interested', 'admitted'],
       required: true,
       index: true
     },
