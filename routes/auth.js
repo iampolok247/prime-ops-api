@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
 import { comparePassword, hashPassword } from '../utils/hash.js';
 import { requireAuth } from '../middleware/auth.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 
@@ -28,6 +29,19 @@ router.post('/login', async (req, res) => {
     });
 
     const { password: _, ...safe } = user.toObject();
+    
+    // Log login activity
+    await logActivity(
+      user._id.toString(),
+      user.name,
+      user.email,
+      user.role,
+      'LOGIN',
+      'Auth',
+      user.email,
+      `User logged in`
+    );
+    
     // Also send token in response body for cross-origin setups
     return res.json({ user: safe, token });
   } catch (e) {
@@ -59,7 +73,19 @@ router.get('/me', requireAuth, async (req, res) => {
 });
 
 // Logout
-router.post('/logout', requireAuth, (req, res) => {
+router.post('/logout', requireAuth, async (req, res) => {
+  // Log logout activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'LOGOUT',
+    'Auth',
+    req.user.email,
+    `User logged out`
+  );
+  
   res.clearCookie('token', { path: '/' });
   return res.json({ ok: true });
 });

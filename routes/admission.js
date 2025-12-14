@@ -3,6 +3,7 @@ import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import Lead from '../models/Lead.js';
 import AdmissionFee from '../models/AdmissionFee.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 
@@ -178,6 +179,18 @@ async function updateLeadStatusHandler(req, res) {
   // populate follow-up authors
   await Lead.populate(lead, { path: 'followUps.by', select: 'name email' });
 
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'UPDATE',
+    'Lead',
+    lead.name,
+    `Changed lead status to ${status}: ${lead.name} (${lead.leadId})`
+  );
+
   return res.json({ lead });
 }
 
@@ -336,6 +349,19 @@ router.post('/fees', requireAuth, async (req, res) => {
   });
 
   const populated = await AdmissionFee.findById(row._id).populate('lead', 'leadId name phone email status');
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'CREATE',
+    'AdmissionFee',
+    lead.name,
+    `Collected admission fee ৳${amount} from ${lead.name} (${lead.leadId})`
+  );
+  
   return res.status(201).json({ fee: populated });
 });
 

@@ -4,6 +4,7 @@ import User from '../models/User.js';
 import Course from '../models/Course.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 
@@ -115,6 +116,18 @@ router.post('/', requireAuth, authorize(['DigitalMarketing']), async (req, res) 
     status: 'Assigned',
     assignedBy: req.user.id
   });
+
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'CREATE',
+    'Lead',
+    name,
+    `Created lead: ${name} (${lead.leadId})`
+  );
 
   return res.status(201).json({ lead });
 });
@@ -410,6 +423,19 @@ router.patch('/:id', requireAuth, authorize(['DigitalMarketing']), async (req, r
     
     await lead.save();
     const populated = await Lead.findById(lead._id).populate('assignedTo', 'name email role').populate('assignedBy', 'name email role');
+    
+    // Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'UPDATE',
+      'Lead',
+      lead.name,
+      `Updated lead: ${lead.name} (${lead.leadId})`
+    );
+    
     return res.json({ lead: populated });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });

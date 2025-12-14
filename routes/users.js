@@ -3,6 +3,7 @@ import User from '../models/User.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
 import { hashPassword } from '../utils/hash.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 
@@ -58,6 +59,19 @@ router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, re
   });
   const { password: _, ...safe } = user.toObject();
   console.log(`[CREATE USER] Successfully created user: ${user.name}`);
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'CREATE',
+    'User',
+    name,
+    `Created user account: ${name} (${role})`
+  );
+  
   return res.status(201).json({ user: safe });
 });
 
@@ -102,6 +116,19 @@ router.put('/:id', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, 
   await target.save();
   const { password: _, ...safe } = target.toObject();
   console.log(`[UPDATE USER] Successfully updated user: ${target.name}`);
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'UPDATE',
+    'User',
+    target.name,
+    `Updated user account: ${target.name} (${target.role})`
+  );
+  
   return res.json({ user: safe });
 });
 
@@ -120,8 +147,23 @@ router.delete('/:id', requireAuth, authorize(['Admin', 'SuperAdmin']), async (re
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Only SuperAdmin can delete SuperAdmin accounts' });
   }
   
+  const userName = target.name;
+  const userRole = target.role;
   await target.deleteOne();
   console.log(`[DELETE USER] Successfully deleted user: ${target.name}`);
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'DELETE',
+    'User',
+    userName,
+    `Deleted user account: ${userName} (${userRole})`
+  );
+  
   return res.json({ ok: true });
 });
 
