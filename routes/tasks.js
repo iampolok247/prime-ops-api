@@ -3,6 +3,7 @@ import Task from '../models/Task.js';
 import User from '../models/User.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 
@@ -64,6 +65,18 @@ router.post('/assign', requireAuth, async (req, res) => {
     const populated = await Task.findById(task._id)
       .populate('assignedBy', 'name email role')
       .populate('assignedTo', 'name email role');
+    
+    // Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'CREATE',
+      'Task',
+      title,
+      `Created task: ${title}`
+    );
     
     return res.status(201).json({ task: populated });
   } catch (e) {
@@ -232,6 +245,18 @@ router.put('/:id', requireAuth, async (req, res) => {
     const populated = await Task.findById(task._id)
       .populate('assignedBy', 'name email role')
       .populate('assignedTo', 'name email role');
+    
+    // Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'UPDATE',
+      'Task',
+      task.title,
+      `Updated task: ${task.title}`
+    );
     
     return res.json({ task: populated });
   } catch (e) {
@@ -428,7 +453,21 @@ router.delete('/:id', requireAuth, async (req, res) => {
       return res.status(403).json({ code: 'FORBIDDEN', message: 'Only the person who assigned this task or admin can delete it' });
     }
 
+    const taskTitle = task.title;
     await task.deleteOne();
+    
+    // Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'DELETE',
+      'Task',
+      taskTitle,
+      `Deleted task: ${taskTitle}`
+    );
+    
     return res.json({ ok: true });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
