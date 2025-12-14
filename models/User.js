@@ -11,6 +11,7 @@ const UserSchema = new mongoose.Schema(
       enum: [
         'SuperAdmin',
         'Admin',
+        'ITAdmin',
         'Accountant',
         'Admission',
         'Recruitment',

@@ -9,9 +9,10 @@ const router = express.Router();
 /**
  * List all employees
  * All authenticated users can view user list (for task assignment)
+ * Excludes ITAdmin from employee lists
  */
 router.get('/', requireAuth, async (req, res) => {
-  const users = await User.find().select('-password');
+  const users = await User.find({ role: { $ne: 'ITAdmin' } }).select('-password');
   return res.json({ users });
 });
 
