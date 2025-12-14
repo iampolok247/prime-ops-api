@@ -16,7 +16,7 @@ const BankTransactionSchema = new mongoose.Schema(
     // For deposits
     depositFrom: {
       type: String,
-      enum: ['Petty Cash', 'Others'],
+      trim: true,
       required: function() { return this.type === 'deposit'; }
     },
     depositFromOther: {
@@ -26,7 +26,7 @@ const BankTransactionSchema = new mongoose.Schema(
     // For withdrawals
     withdrawPurpose: {
       type: String,
-      enum: ['Petty Cash', 'Employee Salary', 'Goods Buy', 'Others'],
+      trim: true,
       required: function() { return this.type === 'withdraw'; }
     },
     withdrawPurposeOther: {

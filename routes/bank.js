@@ -90,13 +90,6 @@ router.post('/deposit', requireAuth, async (req, res) => {
       });
     }
 
-    if (depositFrom === 'Others' && !depositFromOther) {
-      return res.status(400).json({ 
-        code: 'VALIDATION_ERROR', 
-        message: 'Please specify other deposit source' 
-      });
-    }
-
     // Get current balance
     let balance = await AccountBalance.findById('singleton');
     if (!balance) {
@@ -129,7 +122,6 @@ router.post('/deposit', requireAuth, async (req, res) => {
       type: 'deposit',
       date: new Date(date),
       depositFrom,
-      depositFromOther: depositFrom === 'Others' ? depositFromOther : undefined,
       amount,
       notes: notes || '',
       balanceAfter: balance.bankBalance,
@@ -166,13 +158,6 @@ router.post('/withdraw', requireAuth, async (req, res) => {
       });
     }
 
-    if (withdrawPurpose === 'Others' && !withdrawPurposeOther) {
-      return res.status(400).json({ 
-        code: 'VALIDATION_ERROR', 
-        message: 'Please specify other withdrawal purpose' 
-      });
-    }
-
     // Get current balance
     let balance = await AccountBalance.findById('singleton');
     if (!balance) {
@@ -203,7 +188,6 @@ router.post('/withdraw', requireAuth, async (req, res) => {
       type: 'withdraw',
       date: new Date(date),
       withdrawPurpose,
-      withdrawPurposeOther: withdrawPurpose === 'Others' ? withdrawPurposeOther : undefined,
       amount,
       notes: notes || '',
       balanceAfter: balance.bankBalance,
