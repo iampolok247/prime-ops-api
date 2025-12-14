@@ -274,9 +274,11 @@ router.get('/summary', requireAuth, authorize(accOrAdmin), async (req, res) => {
   const start = from ? new Date(from) : new Date(new Date().getFullYear(), 0, 1);
   const end = to ? new Date(to) : new Date();
 
-  const [incomeRows, expenseRows] = await Promise.all([
+  const [incomeRows, expenseRows, approvedFees, approvedCollections] = await Promise.all([
     Income.find({ date: { $gte: start, $lte: end } }),
-    Expense.find({ date: { $gte: start, $lte: end } })
+    Expense.find({ date: { $gte: start, $lte: end } }),
+    AdmissionFee.find({ status: 'Approved' }),
+    DueCollection.find({ status: 'Approved' })
   ]);
 
   const totalIncome = incomeRows.reduce((s, r) => s + r.amount, 0);
@@ -297,6 +299,11 @@ router.get('/summary', requireAuth, authorize(accOrAdmin), async (req, res) => {
   
   const otherIncome = totalIncome - admissionFeesIncome - recruitmentIncome - dueCollectionIncome;
 
+  // Calculate present dues (uncollected)
+  const totalDues = approvedFees.reduce((s, f) => s + (f.dueAmount || 0), 0);
+  const collectedDues = approvedCollections.reduce((s, c) => s + c.amount, 0);
+  const presentDues = totalDues - collectedDues;
+
   // Simple time-series by date (yyyy-mm-dd)
   const bucket = (acc, d, amt) => {
     const key = new Date(d).toISOString().slice(0,10);
@@ -315,6 +322,7 @@ router.get('/summary', requireAuth, authorize(accOrAdmin), async (req, res) => {
     recruitmentIncome,
     dueCollectionIncome,
     otherIncome,
+    presentDues,
     incomeSeries,
     expenseSeries
   });
