@@ -89,7 +89,7 @@ const genLeadId = async (courseName = 'General') => {
 
 // Create single lead (DM only)
 router.post('/', requireAuth, authorize(['DigitalMarketing']), async (req, res) => {
-  const { name, phone, email, interestedCourse, source } = req.body || {};
+  const { name, phone, email, interestedCourse, source, customFields } = req.body || {};
   if (!name) return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Name required' });
 
   // Validate course name if provided
@@ -114,7 +114,8 @@ router.post('/', requireAuth, authorize(['DigitalMarketing']), async (req, res) 
     leadId: await genLeadId(interestedCourse),
     name, phone, email, interestedCourse, source,
     status: 'Assigned',
-    assignedBy: req.user.id
+    assignedBy: req.user.id,
+    customFields: customFields || {}
   });
 
   // Log activity
@@ -154,6 +155,12 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
     if (Object.values(idx).some(v => v < 0)) {
       return res.status(400).json({ code: 'HEADER_MISSING', message: 'Headers must be Name,Phone,Email,InterestedCourse,Source' });
     }
+    
+    // Find custom field columns (any column not in standard fields)
+    const standardFields = ['Name', 'Phone', 'Email', 'InterestedCourse', 'Source'];
+    const customFieldColumns = header
+      .map((h, index) => ({ name: h, index }))
+      .filter(col => !standardFields.includes(col.name) && col.name.length > 0);
 
     // Get all valid courses for validation
     const allCourses = await Course.find({});
@@ -199,11 +206,21 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
         continue; 
       }
 
+      // Extract custom fields from this row
+      const customFields = {};
+      customFieldColumns.forEach(col => {
+        const value = parts[col.index]?.trim();
+        if (value) {
+          customFields[col.name] = value;
+        }
+      });
+
       await Lead.create({
         leadId: await genLeadId(interestedCourse),
         name, phone, email, interestedCourse, source,
         status: 'Assigned',
-        assignedBy: req.user.id
+        assignedBy: req.user.id,
+        customFields
       });
       created++;
     }

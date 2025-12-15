@@ -42,7 +42,13 @@ const LeadSchema = new mongoose.Schema(
         at: { type: Date, default: Date.now },
         by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
       }
-    ]
+    ],
+    // Custom fields from boost/ads forms (flexible key-value pairs)
+    customFields: {
+      type: Map,
+      of: String,
+      default: {}
+    }
   },
   { timestamps: true }
 );
