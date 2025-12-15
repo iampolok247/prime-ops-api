@@ -3,6 +3,7 @@ import Batch from '../models/Batch.js';
 import Lead from '../models/Lead.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 
@@ -35,6 +36,19 @@ router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, re
     });
 
     const populated = await Batch.findById(batch._id).populate('createdBy', 'name email role');
+    
+    // Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'CREATE',
+      'Batch',
+      batchName,
+      `Created batch: ${batchName} (${category})`
+    );
+    
     return res.status(201).json({ batch: populated });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
@@ -108,6 +122,18 @@ router.patch('/:id', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req
         select: 'leadId name phone email interestedCourse'
       });
 
+    // Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'UPDATE',
+      'Batch',
+      batch.batchName,
+      `Updated batch: ${batch.batchName}`
+    );
+
     return res.json({ batch: populated });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
@@ -131,7 +157,21 @@ router.delete('/:id', requireAuth, authorize(['Admin', 'SuperAdmin']), async (re
       });
     }
 
+    const batchName = batch.batchName;
     await Batch.findByIdAndDelete(req.params.id);
+    
+    // Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'DELETE',
+      'Batch',
+      batchName,
+      `Deleted batch: ${batchName}`
+    );
+    
     return res.json({ ok: true, message: 'Batch deleted successfully' });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });

@@ -6,6 +6,7 @@ import AdmissionFee from '../models/AdmissionFee.js';
 import Income from '../models/Income.js';
 import Expense from '../models/Expense.js';
 import DueCollection from '../models/DueCollection.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 const onlyAcc = [ 'Accountant' ];
@@ -196,6 +197,19 @@ router.post('/income', requireAuth, authorize(onlyAcc), async (req, res) => {
     addedBy: req.user.id,
     note: note || ''
   });
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'CREATE',
+    'Income',
+    source,
+    `Added income: ৳${amount} from ${source}`
+  );
+  
   res.status(201).json({ income: row });
 });
 
@@ -241,6 +255,19 @@ router.post('/expense', requireAuth, authorize(onlyAcc), async (req, res) => {
     addedBy: req.user.id,
     note: note || ''
   });
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'CREATE',
+    'Expense',
+    purpose,
+    `Added expense: ৳${amount} for ${purpose}`
+  );
+  
   res.status(201).json({ expense: row });
 });
 

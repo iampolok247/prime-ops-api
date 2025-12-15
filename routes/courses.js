@@ -2,6 +2,7 @@ import express from 'express';
 import Course from '../models/Course.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 
@@ -31,6 +32,19 @@ router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, re
     details: details || '',
     status: 'Active'
   });
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'CREATE',
+    'Course',
+    name,
+    `Created course: ${name}`
+  );
+  
   return res.status(201).json({ course });
 });
 
@@ -50,6 +64,19 @@ router.put('/:id', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, 
   if (status && ['Active', 'Inactive'].includes(status)) c.status = status;
 
   await c.save();
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'UPDATE',
+    'Course',
+    c.name,
+    `Updated course: ${c.name}`
+  );
+  
   return res.json({ course: c });
 });
 
@@ -57,7 +84,22 @@ router.put('/:id', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, 
 router.delete('/:id', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res) => {
   const c = await Course.findById(req.params.id);
   if (!c) return res.status(404).json({ code: 'NOT_FOUND', message: 'Course not found' });
+  
+  const courseName = c.name;
   await c.deleteOne();
+  
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'DELETE',
+    'Course',
+    courseName,
+    `Deleted course: ${courseName}`
+  );
+  
   return res.json({ ok: true });
 });
 
