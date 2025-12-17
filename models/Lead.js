@@ -31,6 +31,7 @@ const LeadSchema = new mongoose.Schema(
       enum: ['Very Interested', 'Interested', 'Few Interested', 'Not Interested'],
       default: 'Interested'
     },
+    specialFilter: { type: String, default: '', trim: true }, // Custom filter field for boost campaigns
     // stage timestamps
     assignedAt: { type: Date },
     counselingAt: { type: Date },

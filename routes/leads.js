@@ -89,7 +89,7 @@ const genLeadId = async (courseName = 'General') => {
 
 // Create single lead (DM only)
 router.post('/', requireAuth, authorize(['DigitalMarketing']), async (req, res) => {
-  const { name, phone, email, interestedCourse, source, customFields } = req.body || {};
+  const { name, phone, email, interestedCourse, source, specialFilter, customFields } = req.body || {};
   if (!name) return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Name required' });
 
   // Validate course name if provided
@@ -113,6 +113,7 @@ router.post('/', requireAuth, authorize(['DigitalMarketing']), async (req, res) 
   const lead = await Lead.create({
     leadId: await genLeadId(interestedCourse),
     name, phone, email, interestedCourse, source,
+    specialFilter: specialFilter || '',
     status: 'Assigned',
     assignedBy: req.user.id,
     customFields: customFields || {}
@@ -150,14 +151,17 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
       Phone: header.indexOf('Phone'),
       Email: header.indexOf('Email'),
       InterestedCourse: header.indexOf('InterestedCourse'),
-      Source: header.indexOf('Source')
+      Source: header.indexOf('Source'),
+      SpecialFilter: header.indexOf('SpecialFilter') // Optional field
     };
-    if (Object.values(idx).some(v => v < 0)) {
-      return res.status(400).json({ code: 'HEADER_MISSING', message: 'Headers must be Name,Phone,Email,InterestedCourse,Source' });
+    // Only check required fields
+    const requiredFields = ['Name', 'Phone', 'Email', 'InterestedCourse', 'Source'];
+    if (requiredFields.some(f => idx[f] < 0)) {
+      return res.status(400).json({ code: 'HEADER_MISSING', message: 'Headers must include: Name,Phone,Email,InterestedCourse,Source' });
     }
     
     // Find custom field columns (any column not in standard fields)
-    const standardFields = ['Name', 'Phone', 'Email', 'InterestedCourse', 'Source'];
+    const standardFields = ['Name', 'Phone', 'Email', 'InterestedCourse', 'Source', 'SpecialFilter'];
     const customFieldColumns = header
       .map((h, index) => ({ name: h, index }))
       .filter(col => !standardFields.includes(col.name) && col.name.length > 0);
@@ -179,6 +183,7 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
       const email = (parts[idx.Email] || '').toLowerCase() || null;
       const interestedCourse = parts[idx.InterestedCourse] || '';
       const source = parts[idx.Source] || 'Others';
+      const specialFilter = idx.SpecialFilter >= 0 ? (parts[idx.SpecialFilter] || '') : '';
 
       if (!name) { 
         skipped++; 
@@ -218,6 +223,7 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
       await Lead.create({
         leadId: await genLeadId(interestedCourse),
         name, phone, email, interestedCourse, source,
+        specialFilter,
         status: 'Assigned',
         assignedBy: req.user.id,
         customFields
