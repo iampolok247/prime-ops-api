@@ -2,6 +2,7 @@
 import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
+import { logActivity } from './activities.js';
 
 import Candidate from '../models/RecruitmentCandidate.js';
 import Employer from '../models/RecruitmentEmployer.js';
@@ -95,6 +96,19 @@ router.post(
       const created = await Candidate.create({
         canId: finalCanId, name, phone, email, jobInterest, source, district, trained, cvLink, date
       });
+
+      // Log activity
+      await logActivity(
+        req.user.id,
+        req.user.name,
+        req.user.email,
+        req.user.role,
+        'CREATE',
+        'Recruitment Candidate',
+        name,
+        `Created candidate: ${name} (${finalCanId})`
+      );
+
       res.status(201).json(created);
     } catch (e) {
       res.status(400).json({ message: e.message || 'Failed to create candidate' });
@@ -109,6 +123,19 @@ router.patch(
   async (req, res) => {
     try {
       const updated = await Candidate.findByIdAndUpdate(req.params.id, req.body, { new: true });
+      
+      // Log activity
+      await logActivity(
+        req.user.id,
+        req.user.name,
+        req.user.email,
+        req.user.role,
+        'UPDATE',
+        'Recruitment Candidate',
+        updated.name,
+        `Updated candidate: ${updated.name} (${updated.canId})`
+      );
+
       res.json(updated);
     } catch (e) {
       res.status(400).json({ message: e.message || 'Failed to update candidate' });
@@ -122,7 +149,28 @@ router.delete(
   authorize(R_WRITE),
   async (req, res) => {
     try {
+      const candidate = await Candidate.findById(req.params.id);
+      if (!candidate) {
+        return res.status(404).json({ message: 'Candidate not found' });
+      }
+
+      const candidateName = candidate.name;
+      const candidateId = candidate.canId;
+
       await Candidate.findByIdAndDelete(req.params.id);
+
+      // Log activity
+      await logActivity(
+        req.user.id,
+        req.user.name,
+        req.user.email,
+        req.user.role,
+        'DELETE',
+        'Recruitment Candidate',
+        candidateName,
+        `Deleted candidate: ${candidateName} (${candidateId})`
+      );
+
       res.json({ ok: true });
     } catch (e) {
       res.status(400).json({ message: e.message || 'Failed to delete candidate' });
@@ -150,6 +198,19 @@ router.post(
         },
         { new: true }
       );
+
+      // Log activity
+      await logActivity(
+        req.user.id,
+        req.user.name,
+        req.user.email,
+        req.user.role,
+        'UPDATE',
+        'Recruitment Candidate',
+        updated.name,
+        `Recruited candidate: ${updated.name} (${updated.canId}) to ${emp.name} - ${job.position}`
+      );
+
       res.json(updated);
     } catch (e) {
       res.status(400).json({ message: e.message || 'Recruit action failed' });
