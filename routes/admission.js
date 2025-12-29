@@ -12,6 +12,7 @@ const isAdmin = (u) => u?.role === 'Admin';
 const isSA = (u) => u?.role === 'SuperAdmin';
 const isAccountant = (u) => u?.role === 'Accountant';
 const isCoordinator = (u) => u?.role === 'Coordinator';
+const isITAdmin = (u) => u?.role === 'ITAdmin';
 
 // ---------- Leads (Admission pipeline) ----------
 
@@ -547,12 +548,12 @@ router.get('/reports', requireAuth, async (req, res) => {
   }
 });
 
-// ---------- Undo Admission (for Admin/SuperAdmin only) ----------
+// ---------- Undo Admission (for Admin/SuperAdmin/ITAdmin only) ----------
 router.post('/leads/:id/undo-admission', requireAuth, async (req, res) => {
   try {
-    // Only Admin and SuperAdmin can undo admissions
-    if (!isAdmin(req.user) && !isSA(req.user)) {
-      return res.status(403).json({ code: 'FORBIDDEN', message: 'Only Admin/SuperAdmin can undo admissions' });
+    // Only Admin, SuperAdmin, and ITAdmin can undo admissions
+    if (!isAdmin(req.user) && !isSA(req.user) && !isITAdmin(req.user)) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Only Admin/SuperAdmin/ITAdmin can undo admissions' });
     }
 
     const lead = await Lead.findById(req.params.id);
