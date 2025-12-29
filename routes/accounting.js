@@ -72,6 +72,48 @@ router.patch('/fees/:id/reject', requireAuth, authorize(onlyAcc), async (req, re
   res.json({ fee: populated });
 });
 
+// Cancel an approved fee (set back to Pending with cancellation note)
+router.patch('/fees/:id/cancel', requireAuth, authorize(onlyAcc), async (req, res) => {
+  const { reason } = req.body;
+  if (!reason || !reason.trim()) {
+    return res.status(400).json({ code: 'BAD_REQUEST', message: 'Cancellation reason is required' });
+  }
+
+  const fee = await AdmissionFee.findById(req.params.id);
+  if (!fee) return res.status(404).json({ code:'NOT_FOUND', message:'Fee not found' });
+  
+  if (fee.status !== 'Approved') {
+    return res.status(400).json({ code: 'BAD_REQUEST', message: 'Can only cancel approved fees' });
+  }
+
+  const previousStatus = fee.status;
+  fee.status = 'Pending';
+  fee.cancellationReason = reason.trim();
+  fee.cancelledAt = new Date();
+  fee.cancelledBy = req.user.id;
+  await fee.save();
+
+  // Log activity
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'CANCEL',
+    'Admission Fee',
+    fee.lead?.name || fee.lead?.toString() || 'Unknown',
+    `Cancelled approved fee (${fee.totalAmount} BDT). Reason: ${reason}`
+  );
+
+  const populated = await AdmissionFee
+    .findById(fee._id)
+    .populate('lead', 'leadId name phone email status')
+    .populate('submittedBy', 'name email')
+    .populate('cancelledBy', 'name email');
+
+  res.json({ fee: populated });
+});
+
 // ---------- Due Collections Approval ----------
 
 // List all due collections (pending/approved/rejected)
