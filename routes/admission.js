@@ -547,4 +547,83 @@ router.get('/reports', requireAuth, async (req, res) => {
   }
 });
 
+// ---------- Undo Admission (for Admin/SuperAdmin only) ----------
+router.post('/leads/:id/undo-admission', requireAuth, async (req, res) => {
+  try {
+    // Only Admin and SuperAdmin can undo admissions
+    if (!isAdmin(req.user) && !isSA(req.user)) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Only Admin/SuperAdmin can undo admissions' });
+    }
+
+    const lead = await Lead.findById(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+    }
+
+    if (lead.status !== 'Admitted') {
+      return res.status(400).json({ code: 'NOT_ADMITTED', message: 'Lead is not in Admitted status' });
+    }
+
+    // 1. Remove from batch's admitted students
+    if (lead.admittedToBatch) {
+      const Batch = (await import('../models/Batch.js')).default;
+      const batch = await Batch.findById(lead.admittedToBatch);
+      if (batch) {
+        batch.admittedStudents = batch.admittedStudents.filter(
+          student => student.lead.toString() !== lead._id.toString()
+        );
+        await batch.save();
+      }
+    }
+
+    // 2. Find and reject/delete associated admission fees
+    const admissionFees = await AdmissionFee.find({ lead: lead._id, status: { $ne: 'Rejected' } });
+    for (const fee of admissionFees) {
+      fee.status = 'Rejected';
+      fee.note = `${fee.note}\n[UNDO] Admission reversed by ${req.user.name} on ${new Date().toISOString()}`;
+      await fee.save();
+    }
+
+    // 3. Reset lead status and admission fields
+    const previousCourse = lead.admittedToCourse;
+    const previousBatch = lead.admittedToBatch;
+    
+    lead.status = 'In Follow Up'; // Return to follow-up stage
+    lead.admittedAt = null;
+    lead.admittedToCourse = null;
+    lead.admittedToBatch = null;
+    lead.notes = `${lead.notes}\n[UNDO] Admission reversed by ${req.user.name} - Reason: Mistaken admission`;
+    
+    await lead.save();
+
+    // 4. Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'UPDATE',
+      'Lead',
+      lead.name,
+      `Undo admission: ${lead.name} (${lead.leadId}) - reversed from Admitted to In Follow Up`
+    );
+
+    const populated = await Lead.findById(lead._id)
+      .populate('assignedTo', 'name email')
+      .populate('assignedBy', 'name email');
+
+    return res.json({ 
+      lead: populated,
+      message: 'Admission successfully reversed',
+      undoneActions: {
+        removedFromBatch: !!previousBatch,
+        rejectedFees: admissionFees.length
+      }
+    });
+  } catch (e) {
+    console.error('Undo admission error:', e);
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
 export default router;

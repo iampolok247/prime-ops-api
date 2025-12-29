@@ -56,6 +56,32 @@ router.get('/me', requireAuth, async (req, res) => {
   if (!user) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
   console.log('[AUTH /me] Database shows role:', user.role);
   
+  // Log ACCESS activity (only once per day to avoid spam)
+  const ActivityLog = (await import('../models/ActivityLog.js')).default;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  
+  const existingAccessToday = await ActivityLog.findOne({
+    user: req.user.id,
+    action: 'ACCESS',
+    createdAt: { $gte: today, $lt: tomorrow }
+  });
+  
+  if (!existingAccessToday) {
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'ACCESS',
+      'Auth',
+      req.user.email,
+      `User accessed portal (session restored)`
+    );
+  }
+  
   // If JWT role doesn't match database role, return both for debugging
   if (req.user.role !== user.role) {
     console.log('[AUTH /me] WARNING: JWT role mismatch! JWT:', req.user.role, 'DB:', user.role);
