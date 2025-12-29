@@ -72,7 +72,7 @@ router.patch('/fees/:id/reject', requireAuth, authorize(onlyAcc), async (req, re
   res.json({ fee: populated });
 });
 
-// Cancel an approved fee (set back to Pending with cancellation note)
+// Cancel an approved fee (change to Rejected with cancellation note)
 router.patch('/fees/:id/cancel', requireAuth, authorize(onlyAcc), async (req, res) => {
   const { reason } = req.body;
   if (!reason || !reason.trim()) {
@@ -86,11 +86,11 @@ router.patch('/fees/:id/cancel', requireAuth, authorize(onlyAcc), async (req, re
     return res.status(400).json({ code: 'BAD_REQUEST', message: 'Can only cancel approved fees' });
   }
 
-  const previousStatus = fee.status;
-  fee.status = 'Pending';
-  fee.cancellationReason = reason.trim();
-  fee.cancelledAt = new Date();
-  fee.cancelledBy = req.user.id;
+  const previousNote = fee.note || '';
+  const cancelNote = `\n\n[CANCELLED by ${req.user.name} on ${new Date().toLocaleString()}]\nReason: ${reason.trim()}`;
+  
+  fee.status = 'Rejected';
+  fee.note = previousNote + cancelNote;
   await fee.save();
 
   // Log activity
@@ -108,8 +108,7 @@ router.patch('/fees/:id/cancel', requireAuth, authorize(onlyAcc), async (req, re
   const populated = await AdmissionFee
     .findById(fee._id)
     .populate('lead', 'leadId name phone email status')
-    .populate('submittedBy', 'name email')
-    .populate('cancelledBy', 'name email');
+    .populate('submittedBy', 'name email');
 
   res.json({ fee: populated });
 });

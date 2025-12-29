@@ -18,10 +18,7 @@ const AdmissionFeeSchema = new mongoose.Schema(
     nextPaymentDate: { type: Date },
     note: { type: String, default: '' },
     status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
-    submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    cancellationReason: { type: String },
-    cancelledAt: { type: Date },
-    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+    submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }
   },
   { timestamps: true }
 );
