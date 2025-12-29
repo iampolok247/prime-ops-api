@@ -277,7 +277,7 @@ router.get('/today-assignments', requireAuth, authorize(['DigitalMarketing']), a
 });
 
 // List leads (DM full view; Admin/SuperAdmin view-only)
-router.get('/', requireAuth, authorize(['DigitalMarketing', 'Admin', 'SuperAdmin']), async (req, res) => {
+router.get('/', requireAuth, authorize(['DigitalMarketing', 'Admin', 'SuperAdmin', 'ITAdmin']), async (req, res) => {
   const { status } = req.query;
   const q = {};
   if (status) q.status = status;
@@ -372,7 +372,7 @@ router.get('/:id/history', requireAuth, async (req, res) => {
     if (!lead.assignedTo || String(lead.assignedTo._id) !== String(req.user.id)) {
       return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot view history for unassigned lead' });
     }
-  } else if (!(role === 'Admin' || role === 'SuperAdmin' || role === 'DigitalMarketing')) {
+  } else if (!(role === 'Admin' || role === 'SuperAdmin' || role === 'DigitalMarketing' || role === 'ITAdmin')) {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
   }
 

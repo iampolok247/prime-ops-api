@@ -56,7 +56,7 @@ router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, re
 });
 
 // List all batches (Admin, SuperAdmin, Admission)
-router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission']), async (req, res) => {
+router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission', 'ITAdmin']), async (req, res) => {
   try {
     const { status, category } = req.query;
     const query = {};
@@ -79,7 +79,7 @@ router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission']), as
 });
 
 // Get single batch with full details
-router.get('/:id', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission']), async (req, res) => {
+router.get('/:id', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission', 'ITAdmin']), async (req, res) => {
   try {
     const batch = await Batch.findById(req.params.id)
       .populate('createdBy', 'name email role')
@@ -231,7 +231,7 @@ router.post('/:id/add-student', requireAuth, authorize(['Admission', 'Admin', 'S
 });
 
 // Get batch report (list of admitted students)
-router.get('/:id/report', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission']), async (req, res) => {
+router.get('/:id/report', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission', 'ITAdmin']), async (req, res) => {
   try {
     const batch = await Batch.findById(req.params.id)
       .populate('createdBy', 'name email role')

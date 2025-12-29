@@ -24,7 +24,7 @@ router.get('/leads', requireAuth, async (req, res) => {
 
   if (isAdmission(req.user)) {
     q.assignedTo = req.user.id;
-  } else if (!(isAdmin(req.user) || isSA(req.user) || isCoordinator(req.user))) {
+  } else if (!(isAdmin(req.user) || isSA(req.user) || isCoordinator(req.user) || isITAdmin(req.user))) {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
   }
 
@@ -61,7 +61,7 @@ async function updateLeadStatusHandler(req, res) {
   if (isAdmission(req.user) && String(lead.assignedTo) !== String(req.user.id)) {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot update unassigned lead' });
   }
-  if (!(isAdmission(req.user) || isAdmin(req.user) || isSA(req.user))) {
+  if (!(isAdmission(req.user) || isAdmin(req.user) || isSA(req.user) || isITAdmin(req.user))) {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
   }
 

@@ -10,7 +10,7 @@ import { logActivity } from './activities.js';
 
 const router = express.Router();
 const onlyAcc = [ 'Accountant' ];
-const accOrAdmin = [ 'Accountant', 'Admin', 'SuperAdmin' ];
+const accOrAdmin = [ 'Accountant', 'Admin', 'SuperAdmin', 'ITAdmin' ];
 
 // ---------- Fees Approval ----------
 
