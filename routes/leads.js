@@ -87,8 +87,8 @@ const genLeadId = async (courseName = 'General') => {
   }
 };
 
-// Create single lead (DM only)
-router.post('/', requireAuth, authorize(['DigitalMarketing']), async (req, res) => {
+// Create single lead (DM, Admission, Admin, SuperAdmin, ITAdmin)
+router.post('/', requireAuth, authorize(['DigitalMarketing', 'Admission', 'Admin', 'SuperAdmin', 'ITAdmin']), async (req, res) => {
   const { name, phone, email, interestedCourse, source, specialFilter, customFields } = req.body || {};
   if (!name) return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Name required' });
 
