@@ -148,6 +148,18 @@ async function updateLeadStatusHandler(req, res) {
     if (notes && String(notes).trim().length > 0) {
       lead.followUps = lead.followUps || [];
       lead.followUps.push({ note: String(notes).trim(), at: new Date(), by: req.user.id });
+      
+      // Log follow-up activity
+      await logActivity(
+        req.user.id,
+        req.user.name,
+        req.user.email,
+        req.user.role,
+        'UPDATE',
+        'Lead',
+        `${lead.name} (${lead.leadId})`,
+        `Added follow-up note: "${String(notes).trim().substring(0, 100)}${String(notes).trim().length > 100 ? '...' : ''}"`
+      );
     }
     
     // Update nextFollowUpDate if provided
@@ -180,7 +192,19 @@ async function updateLeadStatusHandler(req, res) {
   // populate follow-up authors
   await Lead.populate(lead, { path: 'followUps.by', select: 'name email' });
 
-  // Log activity
+  // Log activity with more descriptive message
+  let activityDescription = `Changed lead status to ${status}: ${lead.name} (${lead.leadId})`;
+  
+  if (status === 'In Follow Up' && notes) {
+    activityDescription = `Moved to Follow-Up: ${lead.name} (${lead.leadId})`;
+  } else if (status === 'Counseling') {
+    activityDescription = `Started Counseling: ${lead.name} (${lead.leadId})`;
+  } else if (status === 'Admitted') {
+    activityDescription = `Admitted lead: ${lead.name} (${lead.leadId})`;
+  } else if (status === 'Not Interested') {
+    activityDescription = `Marked as Not Interested: ${lead.name} (${lead.leadId})`;
+  }
+  
   await logActivity(
     req.user.id,
     req.user.name,
@@ -189,7 +213,7 @@ async function updateLeadStatusHandler(req, res) {
     'UPDATE',
     'Lead',
     lead.name,
-    `Changed lead status to ${status}: ${lead.name} (${lead.leadId})`
+    activityDescription
   );
 
   return res.json({ lead });
