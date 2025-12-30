@@ -100,15 +100,17 @@ router.post('/', requireAuth, authorize(['DigitalMarketing', 'Admission', 'Admin
     }
   }
 
-  // simple dedupe guard: same phone OR email within last 180 days
+  // Dedupe guard: same phone/email AND same course within last 180 days
+  // Allow same person to enroll in different courses
   const since = new Date(); since.setDate(since.getDate() - 180);
   const dup = await Lead.findOne({
     $and: [
       { createdAt: { $gte: since } },
+      { interestedCourse: interestedCourse || null },  // Must be same course to be duplicate
       { $or: [{ phone: phone || null }, { email: email?.toLowerCase() || null }] }
     ]
   });
-  if (dup) return res.status(409).json({ code: 'DUPLICATE', message: 'Duplicate phone/email in recent leads' });
+  if (dup) return res.status(409).json({ code: 'DUPLICATE', message: 'Duplicate phone/email for this course in recent leads' });
 
   const lead = await Lead.create({
     leadId: await genLeadId(interestedCourse),
