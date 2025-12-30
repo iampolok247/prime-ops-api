@@ -290,12 +290,43 @@ router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
     lead.priority = priority;
   }
 
+  // Determine if status will change
+  const statusWillChange = lead.status !== 'In Follow Up';
+
   // If not already in "In Follow Up" status, update it
-  if (lead.status !== 'In Follow Up') {
+  if (statusWillChange) {
     lead.status = 'In Follow Up';
   }
 
   await lead.save();
+
+  // Log to Activity Log - EVERY follow-up button click
+  if (note && String(note).trim().length > 0) {
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'UPDATE',
+      'Lead',
+      `${lead.name} (${lead.leadId})`,
+      `Added follow-up note: "${String(note).trim().substring(0, 100)}${String(note).trim().length > 100 ? '...' : ''}"`
+    );
+  }
+
+  // If status changed, log that too
+  if (statusWillChange) {
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'UPDATE',
+      'Lead',
+      lead.name,
+      `Moved to Follow-Up: ${lead.name} (${lead.leadId})`
+    );
+  }
 
   const populated = await Lead.findById(lead._id)
     .populate('assignedTo', 'name email role')
