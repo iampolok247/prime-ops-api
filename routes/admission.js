@@ -149,7 +149,13 @@ async function updateLeadStatusHandler(req, res) {
       lead.followUps = lead.followUps || [];
       lead.followUps.push({ note: String(notes).trim(), at: new Date(), by: req.user.id });
       
-      // Log follow-up activity
+      // Log follow-up activity - EVERY follow-up button click
+      console.log('🔔 LOGGING FOLLOW-UP:', {
+        user: req.user.name,
+        lead: lead.name,
+        note: String(notes).trim().substring(0, 50)
+      });
+      
       await logActivity(
         req.user.id,
         req.user.name,
@@ -160,6 +166,8 @@ async function updateLeadStatusHandler(req, res) {
         `${lead.name} (${lead.leadId})`,
         `Added follow-up note: "${String(notes).trim().substring(0, 100)}${String(notes).trim().length > 100 ? '...' : ''}"`
       );
+      
+      console.log('✅ Follow-up logged successfully');
     }
     
     // Update nextFollowUpDate if provided
