@@ -68,8 +68,9 @@ router.get('/stats', requireAuth, async (req, res) => {
 
 // Manual logging helper
 export async function logActivity(userId, userName, userEmail, userRole, action, resourceType, resourceName, description) {
+  console.log('📝 logActivity CALLED:', { userName, action, resourceType, description: description.substring(0, 50) });
   try {
-    await ActivityLog.create({
+    const result = await ActivityLog.create({
       user: userId,
       userName,
       userEmail,
@@ -79,8 +80,9 @@ export async function logActivity(userId, userName, userEmail, userRole, action,
       resourceName,
       description
     });
+    console.log('✅ Activity logged successfully, ID:', result._id);
   } catch (error) {
-    console.error('Activity log error:', error);
+    console.error('❌ Activity log error:', error);
   }
 }
 
