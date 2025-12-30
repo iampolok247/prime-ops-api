@@ -3,6 +3,7 @@ import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import BankTransaction from '../models/BankTransaction.js';
 import AccountBalance from '../models/AccountBalance.js';
+import { logActivity } from './activities.js';
 
 const router = express.Router();
 
@@ -219,6 +220,18 @@ router.delete('/transactions/:id', requireAuth, async (req, res) => {
     if (!transaction) {
       return res.status(404).json({ code: 'NOT_FOUND', message: 'Transaction not found' });
     }
+
+    // Log activity before deletion
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'DELETE',
+      'BankTransaction',
+      `${transaction.type} - ${transaction.amount} BDT`,
+      `Deleted bank transaction: ${transaction.type} - ${transaction.amount} BDT - ${transaction.purpose || 'N/A'}`
+    );
 
     // Note: Deleting a transaction doesn't automatically reverse the balance
     // This is intentional to maintain audit trail - admins should create compensating transactions

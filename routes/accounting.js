@@ -273,6 +273,19 @@ router.put('/income/:id', requireAuth, authorize(onlyAcc), async (req, res) => {
 router.delete('/income/:id', requireAuth, authorize(onlyAcc), async (req, res) => {
   const row = await Income.findById(req.params.id);
   if (!row) return res.status(404).json({ code:'NOT_FOUND', message:'Income not found' });
+  
+  // Log activity before deletion
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'DELETE',
+    'Income',
+    `Income - ${row.source}`,
+    `Deleted income record: ${row.source} - Amount: ${row.amount} BDT`
+  );
+  
   await row.deleteOne();
   res.json({ ok: true });
 });
@@ -331,6 +344,19 @@ router.put('/expense/:id', requireAuth, authorize(onlyAcc), async (req, res) => 
 router.delete('/expense/:id', requireAuth, authorize(onlyAcc), async (req, res) => {
   const row = await Expense.findById(req.params.id);
   if (!row) return res.status(404).json({ code:'NOT_FOUND', message:'Expense not found' });
+  
+  // Log activity before deletion
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'DELETE',
+    'Expense',
+    `Expense - ${row.purpose}`,
+    `Deleted expense record: ${row.purpose} - Amount: ${row.amount} BDT`
+  );
+  
   await row.deleteOne();
   res.json({ ok: true });
 });

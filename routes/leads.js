@@ -420,6 +420,18 @@ router.delete('/:id', requireAuth, authorize(['DigitalMarketing']), async (req, 
       return res.status(403).json({ code: 'FORBIDDEN', message: 'Can only delete leads you created' });
     }
     
+    // Log activity before deletion
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'DELETE',
+      'Lead',
+      `${lead.name} (${lead.leadId})`,
+      `Deleted lead: ${lead.name} - ${lead.phone || 'N/A'} - ${lead.interestedCourse || 'N/A'}`
+    );
+    
     await Lead.deleteOne({ _id: req.params.id });
     return res.json({ ok: true, message: 'Lead deleted successfully' });
   } catch (e) {
