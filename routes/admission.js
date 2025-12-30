@@ -200,35 +200,35 @@ async function updateLeadStatusHandler(req, res) {
   // populate follow-up authors
   await Lead.populate(lead, { path: 'followUps.by', select: 'name email' });
 
-  // Log activity with more descriptive message
-  let activityDescription = `Changed lead status to ${status}: ${lead.name} (${lead.leadId})`;
-  
   // Detect if this is a status change or just adding a follow-up note
   const statusChanged = from !== status;
   
-  if (status === 'In Follow Up' && notes && statusChanged) {
-    activityDescription = `Moved to Follow-Up: ${lead.name} (${lead.leadId})`;
-  } else if (status === 'In Follow Up' && notes && !statusChanged) {
-    // This is "Follow-Up Again" - already logged separately above, skip duplicate logging
-    return res.json({ lead });
-  } else if (status === 'Counseling') {
-    activityDescription = `Started Counseling: ${lead.name} (${lead.leadId})`;
-  } else if (status === 'Admitted') {
-    activityDescription = `Admitted lead: ${lead.name} (${lead.leadId})`;
-  } else if (status === 'Not Interested') {
-    activityDescription = `Marked as Not Interested: ${lead.name} (${lead.leadId})`;
+  // Only log status change if status actually changed
+  // (Follow-up notes are already logged above at line 157-166)
+  if (statusChanged) {
+    let activityDescription = `Changed lead status to ${status}: ${lead.name} (${lead.leadId})`;
+    
+    if (status === 'In Follow Up') {
+      activityDescription = `Moved to Follow-Up: ${lead.name} (${lead.leadId})`;
+    } else if (status === 'Counseling') {
+      activityDescription = `Started Counseling: ${lead.name} (${lead.leadId})`;
+    } else if (status === 'Admitted') {
+      activityDescription = `Admitted lead: ${lead.name} (${lead.leadId})`;
+    } else if (status === 'Not Interested') {
+      activityDescription = `Marked as Not Interested: ${lead.name} (${lead.leadId})`;
+    }
+    
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'UPDATE',
+      'Lead',
+      lead.name,
+      activityDescription
+    );
   }
-  
-  await logActivity(
-    req.user.id,
-    req.user.name,
-    req.user.email,
-    req.user.role,
-    'UPDATE',
-    'Lead',
-    lead.name,
-    activityDescription
-  );
 
   return res.json({ lead });
 }
