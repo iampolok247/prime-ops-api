@@ -195,8 +195,14 @@ async function updateLeadStatusHandler(req, res) {
   // Log activity with more descriptive message
   let activityDescription = `Changed lead status to ${status}: ${lead.name} (${lead.leadId})`;
   
-  if (status === 'In Follow Up' && notes) {
+  // Detect if this is a status change or just adding a follow-up note
+  const statusChanged = from !== status;
+  
+  if (status === 'In Follow Up' && notes && statusChanged) {
     activityDescription = `Moved to Follow-Up: ${lead.name} (${lead.leadId})`;
+  } else if (status === 'In Follow Up' && notes && !statusChanged) {
+    // This is "Follow-Up Again" - already logged separately above, skip duplicate logging
+    return res.json({ lead });
   } else if (status === 'Counseling') {
     activityDescription = `Started Counseling: ${lead.name} (${lead.leadId})`;
   } else if (status === 'Admitted') {
