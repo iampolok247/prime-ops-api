@@ -19,8 +19,16 @@ router.get('/', requireAuth, async (req, res) => {
     if (resourceType) filter.resourceType = resourceType;
     if (startDate || endDate) {
       filter.createdAt = {};
-      if (startDate) filter.createdAt.$gte = new Date(startDate);
-      if (endDate) filter.createdAt.$lte = new Date(endDate);
+      if (startDate) {
+        const start = new Date(startDate);
+        start.setHours(0, 0, 0, 0); // Start of day
+        filter.createdAt.$gte = start;
+      }
+      if (endDate) {
+        const end = new Date(endDate);
+        end.setHours(23, 59, 59, 999); // End of day
+        filter.createdAt.$lte = end;
+      }
     }
 
     const total = await ActivityLog.countDocuments(filter);
