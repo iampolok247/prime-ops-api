@@ -366,18 +366,23 @@ router.delete('/expense/:id', requireAuth, authorize(onlyAcc), async (req, res) 
 
 router.get('/summary', requireAuth, authorize(accOrAdmin), async (req, res) => {
   const { from, to } = req.query;
+  
+  // If no dates provided (Lifetime), don't filter by date
+  const hasDateFilter = from || to;
   const start = from ? new Date(from) : new Date(new Date().getFullYear(), 0, 1);
   const end = to ? new Date(to) : new Date();
 
+  // Build queries with optional date filtering
+  const incomeQuery = hasDateFilter ? { date: { $gte: start, $lte: end } } : {};
+  const expenseQuery = hasDateFilter ? { date: { $gte: start, $lte: end } } : {};
+  const recruitmentQuery = hasDateFilter ? { date: { $gte: start, $lte: end }, status: 'Approved' } : { status: 'Approved' };
+
   const [incomeRows, expenseRows, approvedFees, approvedCollections, recruitmentIncomeRows] = await Promise.all([
-    Income.find({ date: { $gte: start, $lte: end } }),
-    Expense.find({ date: { $gte: start, $lte: end } }),
+    Income.find(incomeQuery),
+    Expense.find(expenseQuery),
     AdmissionFee.find({ status: 'Approved' }),
     DueCollection.find({ status: 'Approved' }),
-    RecruitmentIncome.find({ 
-      date: { $gte: start, $lte: end },
-      status: 'Approved'
-    })
+    RecruitmentIncome.find(recruitmentQuery)
   ]);
 
   const totalIncome = incomeRows.reduce((s, r) => s + r.amount, 0);
