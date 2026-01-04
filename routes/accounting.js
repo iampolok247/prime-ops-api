@@ -6,6 +6,7 @@ import AdmissionFee from '../models/AdmissionFee.js';
 import Income from '../models/Income.js';
 import Expense from '../models/Expense.js';
 import DueCollection from '../models/DueCollection.js';
+import RecruitmentIncome from '../models/RecruitmentIncome.js';
 import { logActivity } from './activities.js';
 
 const router = express.Router();
@@ -368,11 +369,15 @@ router.get('/summary', requireAuth, authorize(accOrAdmin), async (req, res) => {
   const start = from ? new Date(from) : new Date(new Date().getFullYear(), 0, 1);
   const end = to ? new Date(to) : new Date();
 
-  const [incomeRows, expenseRows, approvedFees, approvedCollections] = await Promise.all([
+  const [incomeRows, expenseRows, approvedFees, approvedCollections, recruitmentIncomeRows] = await Promise.all([
     Income.find({ date: { $gte: start, $lte: end } }),
     Expense.find({ date: { $gte: start, $lte: end } }),
     AdmissionFee.find({ status: 'Approved' }),
-    DueCollection.find({ status: 'Approved' })
+    DueCollection.find({ status: 'Approved' }),
+    RecruitmentIncome.find({ 
+      date: { $gte: start, $lte: end },
+      status: 'Approved'
+    })
   ]);
 
   const totalIncome = incomeRows.reduce((s, r) => s + r.amount, 0);
@@ -383,15 +388,17 @@ router.get('/summary', requireAuth, authorize(accOrAdmin), async (req, res) => {
     .filter(r => r.source === 'Admission Fee')
     .reduce((s, r) => s + r.amount, 0);
   
-  const recruitmentIncome = incomeRows
-    .filter(r => r.source === 'Recruitment Income')
-    .reduce((s, r) => s + r.amount, 0);
+  // Get recruitment income from RecruitmentIncome collection
+  const recruitmentIncome = recruitmentIncomeRows.reduce((s, r) => s + (r.amount || 0), 0);
   
   const dueCollectionIncome = incomeRows
     .filter(r => r.source === 'Due Collection')
     .reduce((s, r) => s + r.amount, 0);
   
-  const otherIncome = totalIncome - admissionFeesIncome - recruitmentIncome - dueCollectionIncome;
+  const otherIncome = totalIncome - admissionFeesIncome - dueCollectionIncome;
+
+  // Calculate total income including recruitment
+  const totalIncomeWithRecruitment = totalIncome + recruitmentIncome;
 
   // Calculate present dues (uncollected)
   const totalDues = approvedFees.reduce((s, f) => s + (f.dueAmount || 0), 0);
@@ -406,12 +413,13 @@ router.get('/summary', requireAuth, authorize(accOrAdmin), async (req, res) => {
   const incomeSeries = {};
   const expenseSeries = {};
   incomeRows.forEach(r => bucket(incomeSeries, r.date, r.amount));
+  recruitmentIncomeRows.forEach(r => bucket(incomeSeries, r.date, r.amount)); // Add recruitment income to series
   expenseRows.forEach(r => bucket(expenseSeries, r.date, r.amount));
 
   res.json({
-    totalIncome,
+    totalIncome: totalIncomeWithRecruitment, // Use total including recruitment
     totalExpense,
-    profit: totalIncome - totalExpense,
+    profit: totalIncomeWithRecruitment - totalExpense, // Calculate profit with recruitment included
     admissionFeesIncome,
     recruitmentIncome,
     dueCollectionIncome,
