@@ -161,7 +161,7 @@ router.post(
   authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
   async (req, res) => {
     try {
-      const { campaignName, platform, boostType, cost, leads, postEngagements, thruPlays, impressions, reach, notes, campaignDate } = req.body || {};
+      const { campaignName, platform, boostType, currency, cost, leads, postEngagements, thruPlays, impressions, reach, notes, campaignDate } = req.body || {};
       
       if (!campaignName || !platform || !boostType || cost === undefined) {
         return res.status(400).json({ 
@@ -174,6 +174,7 @@ router.post(
         campaignName,
         platform,
         boostType,
+        currency: currency || 'BDT',
         cost: Number(cost),
         leads: Number(leads) || 0,
         postEngagements: Number(postEngagements) || 0,
@@ -200,7 +201,7 @@ router.patch(
   authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
   async (req, res) => {
     try {
-      const { campaignName, platform, boostType, cost, leads, postEngagements, thruPlays, impressions, reach, notes, campaignDate } = req.body || {};
+      const { campaignName, platform, boostType, currency, cost, leads, postEngagements, thruPlays, impressions, reach, notes, campaignDate } = req.body || {};
       
       const campaign = await DMCampaign.findById(req.params.id);
       if (!campaign) {
@@ -210,6 +211,7 @@ router.patch(
       if (campaignName !== undefined) campaign.campaignName = campaignName;
       if (platform !== undefined) campaign.platform = platform;
       if (boostType !== undefined) campaign.boostType = boostType;
+      if (currency !== undefined) campaign.currency = currency;
       if (cost !== undefined) campaign.cost = Number(cost);
       if (leads !== undefined) campaign.leads = Number(leads);
       if (postEngagements !== undefined) campaign.postEngagements = Number(postEngagements);
