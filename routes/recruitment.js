@@ -381,6 +381,33 @@ router.post(
 );
 
 // Approve income (Accountant only)
+// Update income (only if not approved yet)
+router.put(
+  '/income/:id',
+  requireAuth,
+  authorize(R_WRITE),
+  async (req, res) => {
+    try {
+      const existing = await RIncome.findById(req.params.id);
+      if (!existing) return res.status(404).json({ message: 'Income not found' });
+      if (existing.status === 'Approved') {
+        return res.status(400).json({ message: 'Cannot edit approved income' });
+      }
+
+      const { date, source, amount, description, incomeFrom, incomeFor } = req.body;
+      const updated = await RIncome.findByIdAndUpdate(
+        req.params.id,
+        { date, source, amount, description, incomeFrom, incomeFor },
+        { new: true, runValidators: true }
+      ).populate('submittedBy approvedBy incomeFrom incomeFor', 'name email role');
+      
+      res.json(updated);
+    } catch (e) {
+      res.status(400).json({ message: e.message || 'Failed to update income' });
+    }
+  }
+);
+
 router.post(
   '/income/:id/approve',
   requireAuth,
