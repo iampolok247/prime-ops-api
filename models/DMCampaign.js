@@ -13,7 +13,12 @@ const DMCampaignSchema = new mongoose.Schema(
       enum: ['Leads', 'Engagements', 'ThruPlays'], 
       required: true 
     },
-    cost: { type: Number, required: true }, // Cost in currency (₹)
+    currency: {
+      type: String,
+      enum: ['BDT', 'USD'],
+      default: 'BDT'
+    },
+    cost: { type: Number, required: true }, // Cost in selected currency
     leads: { type: Number, default: 0 },
     postEngagements: { type: Number, default: 0 },
     thruPlays: { type: Number, default: 0 },
