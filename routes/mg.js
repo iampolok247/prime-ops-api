@@ -6,7 +6,7 @@ import { authorize } from '../middleware/authorize.js';
 
 const router = Router();
 
-const canMG = ['MotionGraphics', 'Admin', 'SuperAdmin'];
+const canMG = ['MotionGraphics', 'Admin', 'SuperAdmin', 'HeadOfCreative'];
 
 // --- Stats for MG dashboard ---
 router.get('/stats', requireAuth, authorize(canMG), async (req, res, next) => {

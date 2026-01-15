@@ -10,6 +10,7 @@ const router = express.Router();
 const isAdmission = (u) => u?.role === 'Admission';
 const isAdmin = (u) => u?.role === 'Admin';
 const isSA = (u) => u?.role === 'SuperAdmin';
+const isHeadOfCreative = (u) => u?.role === 'HeadOfCreative';
 const isAccountant = (u) => u?.role === 'Accountant';
 const isCoordinator = (u) => u?.role === 'Coordinator';
 const isITAdmin = (u) => u?.role === 'ITAdmin';
@@ -24,7 +25,7 @@ router.get('/leads', requireAuth, async (req, res) => {
 
   if (isAdmission(req.user)) {
     q.assignedTo = req.user.id;
-  } else if (!(isAdmin(req.user) || isSA(req.user) || isCoordinator(req.user) || isITAdmin(req.user))) {
+  } else if (!(isAdmin(req.user) || isSA(req.user) || isHeadOfCreative(req.user) || isCoordinator(req.user) || isITAdmin(req.user))) {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
   }
 

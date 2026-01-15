@@ -278,8 +278,8 @@ router.get('/today-assignments', requireAuth, authorize(['DigitalMarketing']), a
   }
 });
 
-// List leads (DM full view; Admin/SuperAdmin view-only)
-router.get('/', requireAuth, authorize(['DigitalMarketing', 'Admin', 'SuperAdmin', 'ITAdmin']), async (req, res) => {
+// List leads (DM full view; Admin/SuperAdmin/HeadOfCreative view-only)
+router.get('/', requireAuth, authorize(['DigitalMarketing', 'Admin', 'SuperAdmin', 'HeadOfCreative', 'ITAdmin']), async (req, res) => {
   const { status } = req.query;
   const q = {};
   if (status) q.status = status;

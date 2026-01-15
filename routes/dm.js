@@ -12,7 +12,7 @@ const router = express.Router();
 router.get(
   "/expense",
   requireAuth,
-  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
   async (req, res) => {
     const items = await DMExpense.find().sort({ date: -1 });
     return res.json({ items });
@@ -62,7 +62,7 @@ router.delete(
 router.get(
   "/social",
   requireAuth,
-  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
   async (req, res) => {
     const latest = await SocialMetrics.findOne().sort({ updatedAt: -1 });
     return res.json({
@@ -90,7 +90,7 @@ router.put(
 router.get(
   "/seo",
   requireAuth,
-  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
   async (req, res) => {
     const items = await SEOWork.find().sort({ date: -1 });
     return res.json({ items });
@@ -127,7 +127,7 @@ router.post(
 router.get(
   "/campaigns",
   requireAuth,
-  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
   async (req, res) => {
     try {
       const { platform, from, to } = req.query;
@@ -158,7 +158,7 @@ router.get(
 router.post(
   "/campaigns",
   requireAuth,
-  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
   async (req, res) => {
     try {
       const { campaignName, platform, boostType, currency, cost, leads, postEngagements, thruPlays, impressions, reach, notes, campaignDate } = req.body || {};
@@ -198,7 +198,7 @@ router.post(
 router.patch(
   "/campaigns/:id",
   requireAuth,
-  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
   async (req, res) => {
     try {
       const { campaignName, platform, boostType, currency, cost, leads, postEngagements, thruPlays, impressions, reach, notes, campaignDate } = req.body || {};
@@ -234,7 +234,7 @@ router.patch(
 router.delete(
   "/campaigns/:id",
   requireAuth,
-  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
   async (req, res) => {
     try {
       const campaign = await DMCampaign.findByIdAndDelete(req.params.id);
@@ -252,7 +252,7 @@ router.delete(
 router.get(
   "/campaigns/summary/metrics",
   requireAuth,
-  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
   async (req, res) => {
     try {
       const { platform, from, to } = req.query;
