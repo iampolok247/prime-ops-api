@@ -17,6 +17,7 @@ const UserSchema = new mongoose.Schema(
         'Recruitment',
         'DigitalMarketing',
         'MotionGraphics',
+        'HeadOfCreative',
         'Coordinator'
       ]
     },
