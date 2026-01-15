@@ -298,4 +298,54 @@ router.get(
   }
 );
 
+/** -------- Dashboard Summary (for HeadOfCreative) -------- */
+router.get(
+  "/dashboard",
+  requireAuth,
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin", "HeadOfCreative"]),
+  async (req, res) => {
+    try {
+      const { from, to } = req.query;
+      const Lead = (await import('../models/Lead.js')).default;
+      
+      let dateFilter = {};
+      if (from || to) {
+        dateFilter.createdAt = {};
+        if (from) dateFilter.createdAt.$gte = new Date(from);
+        if (to) {
+          const endDate = new Date(to);
+          endDate.setHours(23, 59, 59, 999);
+          dateFilter.createdAt.$lte = endDate;
+        }
+      }
+      
+      const [totalLeads, metaLeads, linkedinLeads, manualLeads, totalExpense] = await Promise.all([
+        Lead.countDocuments(dateFilter),
+        Lead.countDocuments({ ...dateFilter, source: 'Meta' }),
+        Lead.countDocuments({ ...dateFilter, source: 'LinkedIn' }),
+        Lead.countDocuments({ ...dateFilter, source: 'Manual' }),
+        DMExpense.aggregate([
+          ...(from || to ? [{ $match: {
+            date: {
+              ...(from && { $gte: new Date(from) }),
+              ...(to && { $lte: new Date(to) })
+            }
+          }}] : []),
+          { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]).then(r => r[0]?.total || 0)
+      ]);
+      
+      return res.json({
+        totalLeads,
+        metaLeads,
+        linkedinLeads,
+        manualLeads,
+        totalExpense
+      });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
 export default router;

@@ -697,4 +697,41 @@ router.post('/leads/:id/undo-admission', requireAuth, async (req, res) => {
   }
 });
 
+// ---------- Dashboard Summary (for HeadOfCreative) ----------
+router.get('/dashboard', requireAuth, async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    
+    let dateFilter = {};
+    if (from || to) {
+      dateFilter.createdAt = {};
+      if (from) dateFilter.createdAt.$gte = new Date(from);
+      if (to) {
+        const endDate = new Date(to);
+        endDate.setHours(23, 59, 59, 999);
+        dateFilter.createdAt.$lte = endDate;
+      }
+    }
+    
+    // Count leads by status
+    const [assigned, counseling, followUp, admitted, notInterested] = await Promise.all([
+      Lead.countDocuments({ ...dateFilter, status: 'Assigned' }),
+      Lead.countDocuments({ ...dateFilter, status: 'Counseling' }),
+      Lead.countDocuments({ ...dateFilter, status: 'Follow-up' }),
+      Lead.countDocuments({ ...dateFilter, status: 'Admitted' }),
+      Lead.countDocuments({ ...dateFilter, status: 'Not Interested' })
+    ]);
+    
+    return res.json({
+      assigned,
+      counseling,
+      followUp,
+      admitted,
+      notInterested
+    });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
 export default router;
