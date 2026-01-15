@@ -19,9 +19,9 @@ router.get('/', requireAuth, async (req, res) => {
 
 /**
  * List Admission users (for assigning leads)
- * Allowed: Admin, SuperAdmin, DigitalMarketing (read-only)
+ * Allowed: Admin, SuperAdmin, HeadOfCreative, DigitalMarketing (read-only)
  */
-router.get('/admission', requireAuth, authorize(['Admin', 'SuperAdmin', 'DigitalMarketing']), async (req, res) => {
+router.get('/admission', requireAuth, authorize(['Admin', 'SuperAdmin', 'HeadOfCreative', 'DigitalMarketing']), async (req, res) => {
   const users = await User.find({ role: 'Admission', isActive: true })
     .select('name email role avatar department designation');
   return res.json({ users });
