@@ -190,4 +190,46 @@ router.put('/reorder', requireAuth, authorize(['Admin']), async (req, res) => {
   }
 });
 
+/**
+ * Temporary endpoint to update user role by email
+ * Only SuperAdmin can use this
+ */
+router.patch('/update-role-by-email', requireAuth, authorize(['SuperAdmin']), async (req, res) => {
+  const { email, role, jobTitle } = req.body;
+  
+  if (!email || !role) {
+    return res.status(400).json({ code: 'MISSING_FIELDS', message: 'Email and role are required' });
+  }
+  
+  try {
+    const user = await User.findOne({ email });
+    
+    if (!user) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
+    }
+    
+    const oldRole = user.role;
+    const oldJobTitle = user.jobTitle;
+    
+    user.role = role;
+    if (jobTitle) user.jobTitle = jobTitle;
+    await user.save();
+    
+    return res.json({ 
+      ok: true, 
+      message: 'Role updated successfully',
+      user: {
+        name: user.name,
+        email: user.email,
+        oldRole,
+        newRole: user.role,
+        oldJobTitle,
+        newJobTitle: user.jobTitle
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ code: 'UPDATE_FAILED', message: error.message });
+  }
+});
+
 export default router;
