@@ -18,6 +18,25 @@ router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin', 'DigitalMarketing
   return res.json({ courses });
 });
 
+// Debug endpoint - check course names for bulk upload validation
+router.get('/debug-names', requireAuth, authorize(['Admin', 'SuperAdmin', 'DigitalMarketing']), async (req, res) => {
+  const courses = await Course.find().sort({ createdAt: -1 });
+  const debugInfo = courses.map(c => ({
+    courseId: c.courseId,
+    originalName: c.name,
+    trimmedName: c.name.trim(),
+    lowercaseName: c.name.trim().toLowerCase(),
+    nameLength: c.name.length,
+    hasPadding: c.name !== c.name.trim(),
+    category: c.category,
+    status: c.status
+  }));
+  return res.json({ 
+    total: courses.length,
+    courses: debugInfo 
+  });
+});
+
 // Create (Admin + SuperAdmin)
 router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res) => {
   const { name, category, duration, regularFee, discountFee, teacher, details } = req.body || {};
