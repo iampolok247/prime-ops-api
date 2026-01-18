@@ -171,6 +171,9 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
     // Get all valid courses for validation
     const allCourses = await Course.find({});
     const validCourseNames = allCourses.map(c => c.name.trim().toLowerCase());
+    
+    console.log('[BULK UPLOAD] Valid course names:', validCourseNames);
+    console.log('[BULK UPLOAD] All courses:', allCourses.map(c => ({ id: c.courseId, name: c.name })));
 
     const since = new Date(); since.setDate(since.getDate() - 180);
     let created = 0, skipped = 0;
