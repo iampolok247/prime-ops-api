@@ -196,10 +196,12 @@ router.post('/bulk', requireAuth, authorize(['DigitalMarketing']), async (req, r
         continue; 
       }
 
-      // Validate course name matches exactly
-      if (interestedCourse && !validCourseNames.includes(interestedCourse.trim().toLowerCase())) {
+      // Validate course name matches (case-insensitive, trim whitespace)
+      const normalizedCourseName = interestedCourse.trim().toLowerCase();
+      if (interestedCourse && !validCourseNames.includes(normalizedCourseName)) {
         skipped++;
         errors.push(`Row ${i + 1}: Course "${interestedCourse}" does not exist`);
+        console.log(`[BULK UPLOAD] Row ${i + 1}: Course not found. Looking for: "${normalizedCourseName}", Available: ${validCourseNames.join(', ')}`);
         continue;
       }
 
