@@ -17,6 +17,33 @@ const isITAdmin = (u) => u?.role === 'ITAdmin';
 
 // ---------- Leads (Admission pipeline) ----------
 
+// Get lead counts by status for current user
+router.get('/leads/counts', requireAuth, async (req, res) => {
+  try {
+    const q = {};
+    
+    // If Admission user, only their leads
+    if (isAdmission(req.user)) {
+      q.assignedTo = req.user.id;
+    } else if (!(isAdmin(req.user) || isSA(req.user) || isHeadOfCreative(req.user) || isCoordinator(req.user) || isITAdmin(req.user))) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
+    }
+
+    // Count for each status
+    const statuses = ['Assigned', 'Counseling', 'In Follow Up', 'Admitted', 'Not Interested'];
+    const counts = {};
+    
+    for (const status of statuses) {
+      counts[status] = await Lead.countDocuments({ ...q, status });
+    }
+    
+    return res.json({ counts });
+  } catch (error) {
+    console.error('Error getting lead counts:', error);
+    return res.status(500).json({ code: 'SERVER_ERROR', message: error.message });
+  }
+});
+
 // List leads for Admission (own) or Admin/SA/Coordinator (all)
 router.get('/leads', requireAuth, async (req, res) => {
   const { status } = req.query;
