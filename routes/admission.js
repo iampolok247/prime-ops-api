@@ -71,7 +71,7 @@ async function updateLeadStatusHandler(req, res) {
   console.log('Request body:', req.body);
   console.log('User:', req.user?.name, req.user?.role);
   
-  const { status, notes, courseId, batchId, nextFollowUpDate } = req.body || {};
+  const { status, notes, courseId, batchId, nextFollowUpDate, priority } = req.body || {};
   const allowed = ['Counseling', 'Admitted', 'In Follow Up', 'Not Interested'];
   if (!allowed.includes(status)) {
     console.log('ERROR: Invalid status:', status);
@@ -172,35 +172,74 @@ async function updateLeadStatusHandler(req, res) {
   }
 
   if (status === 'In Follow Up') {
+    // Check if this is the first time moving from Assigned to Follow Up (counseling action)
+    const isFirstCounseling = from === 'Assigned';
+    
     // if notes provided, append a follow-up entry
     if (notes && String(notes).trim().length > 0) {
       lead.followUps = lead.followUps || [];
       lead.followUps.push({ note: String(notes).trim(), at: new Date(), by: req.user.id });
       
-      // Log follow-up activity - EVERY follow-up button click
-      console.log('🔔 LOGGING FOLLOW-UP:', {
-        user: req.user.name,
-        lead: lead.name,
-        note: String(notes).trim().substring(0, 50)
-      });
-      
-      await logActivity(
-        req.user.id,
-        req.user.name,
-        req.user.email,
-        req.user.role,
-        'UPDATE',
-        'Lead',
-        `${lead.name} (${lead.leadId})`,
-        `Added follow-up note: "${String(notes).trim().substring(0, 100)}${String(notes).trim().length > 100 ? '...' : ''}"`
-      );
-      
-      console.log('✅ Follow-up logged successfully');
+      // If this is first counseling (from Assigned), log as counseling activity
+      if (isFirstCounseling) {
+        const LeadActivity = (await import('../models/LeadActivity.js')).default;
+        await LeadActivity.create({
+          lead: lead._id,
+          advisor: req.user.id,
+          activityType: 'counseling',
+          actionDate: new Date(),
+          note: String(notes).trim()
+        });
+        
+        console.log('🔔 LOGGING COUNSELING:', {
+          user: req.user.name,
+          lead: lead.name,
+          note: String(notes).trim().substring(0, 50)
+        });
+        
+        await logActivity(
+          req.user.id,
+          req.user.name,
+          req.user.email,
+          req.user.role,
+          'UPDATE',
+          'Lead',
+          `${lead.name} (${lead.leadId})`,
+          `Started counseling and moved to Follow-Up: "${String(notes).trim().substring(0, 100)}${String(notes).trim().length > 100 ? '...' : ''}"`
+        );
+        
+        console.log('✅ Counseling logged successfully');
+      } else {
+        // Otherwise, log as regular follow-up
+        console.log('🔔 LOGGING FOLLOW-UP:', {
+          user: req.user.name,
+          lead: lead.name,
+          note: String(notes).trim().substring(0, 50)
+        });
+        
+        await logActivity(
+          req.user.id,
+          req.user.name,
+          req.user.email,
+          req.user.role,
+          'UPDATE',
+          'Lead',
+          `${lead.name} (${lead.leadId})`,
+          `Added follow-up note: "${String(notes).trim().substring(0, 100)}${String(notes).trim().length > 100 ? '...' : ''}"`
+        );
+        
+        console.log('✅ Follow-up logged successfully');
+      }
     }
     
     // Update nextFollowUpDate if provided
     if (nextFollowUpDate) {
       lead.nextFollowUpDate = new Date(nextFollowUpDate);
+    }
+    
+    // Update priority if provided
+    if (priority) {
+      lead.priority = priority;
     }
   }
 
@@ -231,9 +270,12 @@ async function updateLeadStatusHandler(req, res) {
   // Detect if this is a status change or just adding a follow-up note
   const statusChanged = from !== status;
   
-  // Only log status change if status actually changed
-  // (Follow-up notes are already logged above at line 157-166)
-  if (statusChanged) {
+  // Check if this was a first counseling (Assigned -> Follow Up with notes)
+  const wasFirstCounseling = (from === 'Assigned' && status === 'In Follow Up' && notes && String(notes).trim().length > 0);
+  
+  // Only log status change if status actually changed AND it's not a first counseling
+  // (First counseling is already logged above with counseling note)
+  if (statusChanged && !wasFirstCounseling) {
     let activityDescription = `Changed lead status to ${status}: ${lead.name} (${lead.leadId})`;
     
     if (status === 'In Follow Up') {
@@ -518,12 +560,20 @@ router.get('/follow-up-notifications', requireAuth, async (req, res) => {
 
 // Get admission reports - overall or filtered by user
 router.get('/reports', requireAuth, async (req, res) => {
-  if (!isAdmin(req.user) && !isSA(req.user)) {
+  const { userId, from, to } = req.query;
+  
+  // Admission users can only request their own reports
+  if (isAdmission(req.user)) {
+    // Force userId to be their own ID
+    if (userId && userId !== String(req.user.id)) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Can only view own reports' });
+    }
+  } else if (!isAdmin(req.user) && !isSA(req.user)) {
+    // Non-admission users must be Admin or SuperAdmin
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Admin/SuperAdmin only' });
   }
 
   try {
-    const { userId, from, to } = req.query;
     
     // Build date filter if provided
     const dateFilter = {};
@@ -551,11 +601,19 @@ router.get('/reports', requireAuth, async (req, res) => {
         ...dateFilter
       }).populate('assignedTo', 'name email');
 
+      // Count counseling activities from LeadActivity (not from status)
+      const LeadActivity = (await import('../models/LeadActivity.js')).default;
+      const counselingCount = await LeadActivity.countDocuments({
+        advisor: userId,
+        activityType: 'counseling',
+        actionDate: dateFilter.createdAt || {}
+      });
+
       // Calculate statistics
       const stats = {
         totalLeads: userLeads.length,
         assigned: userLeads.filter(l => l.status === 'Assigned').length,
-        counseling: userLeads.filter(l => l.status === 'Counseling').length,
+        counseling: counselingCount, // Use LeadActivity count instead of status
         inFollowUp: userLeads.filter(l => l.status === 'In Follow Up').length,
         admitted: userLeads.filter(l => l.status === 'Admitted').length,
         notAdmitted: userLeads.filter(l => l.status === 'Not Admitted').length
@@ -593,10 +651,18 @@ router.get('/reports', requireAuth, async (req, res) => {
           ...dateFilter
         });
 
+        // Count counseling activities from LeadActivity
+        const LeadActivity = (await import('../models/LeadActivity.js')).default;
+        const counselingCount = await LeadActivity.countDocuments({
+          advisor: user._id,
+          activityType: 'counseling',
+          actionDate: dateFilter.createdAt || {}
+        });
+
         const stats = {
           totalLeads: userLeads.length,
           assigned: userLeads.filter(l => l.status === 'Assigned').length,
-          counseling: userLeads.filter(l => l.status === 'Counseling').length,
+          counseling: counselingCount, // Use LeadActivity count
           inFollowUp: userLeads.filter(l => l.status === 'In Follow Up').length,
           admitted: userLeads.filter(l => l.status === 'Admitted').length,
           notAdmitted: userLeads.filter(l => l.status === 'Not Admitted').length
