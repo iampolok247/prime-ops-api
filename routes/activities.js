@@ -7,7 +7,7 @@ const router = express.Router();
 // Get all activities with filtering
 router.get('/', requireAuth, async (req, res) => {
   try {
-    if (!['ITAdmin', 'SuperAdmin', 'Admin'].includes(req.user.role)) {
+    if (!['ITAdmin', 'SuperAdmin', 'Admin', 'Accountant'].includes(req.user.role)) {
       return res.status(403).json({ message: 'Access denied' });
     }
 

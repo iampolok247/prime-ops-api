@@ -132,8 +132,8 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     if (req.user.role === 'Admission') {
       // Admission users can only request their own metrics
       targetUserId = req.user.id;
-    } else if (req.user.role === 'Admin' || req.user.role === 'SuperAdmin' || req.user.role === 'HeadOfCreative') {
-      // Admins/HeadOfCreative can request for specific user or all (no userId)
+    } else if (req.user.role === 'Admin' || req.user.role === 'SuperAdmin' || req.user.role === 'HeadOfCreative' || req.user.role === 'Accountant') {
+      // Admins/HeadOfCreative/Accountant can request for specific user or all (no userId)
       targetUserId = userId || null;
     } else {
       return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
