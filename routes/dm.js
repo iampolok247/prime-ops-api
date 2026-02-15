@@ -5,6 +5,7 @@ import DMExpense from "../models/DMExpense.js";
 import DMCampaign from "../models/DMCampaign.js";
 import SocialMetrics from "../models/SocialMetrics.js";
 import SEOWork from "../models/SEOWork.js";
+import DMDailyChecklist from "../models/DMDailyChecklist.js";
 
 const router = express.Router();
 
@@ -342,6 +343,289 @@ router.get(
         manualLeads,
         totalExpense
       });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+/** -------- Daily Checklist Routes -------- */
+
+// GET today's checklist for current user
+router.get(
+  "/daily-checklist",
+  requireAuth,
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      
+      // Allow force reset via query parameter
+      if (req.query.reset === 'true') {
+        const today = new Date().toISOString().split('T')[0];
+        await DMDailyChecklist.deleteMany({ userId, date: today });
+        console.log('🔄 Force reset checklist for user:', userId);
+      }
+      
+      const checklist = await DMDailyChecklist.getOrCreateToday(userId);
+      const completionPercentage = checklist.getCompletionPercentage();
+      
+      console.log('📋 Checklist items count:', checklist.items.length);
+      
+      return res.json({ 
+        checklist,
+        completionPercentage
+      });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// POST - Mark a task as complete with comment
+router.post(
+  "/daily-checklist/complete",
+  requireAuth,
+  authorize(["DigitalMarketing"]),
+  async (req, res) => {
+    try {
+      const { taskIndex, comment } = req.body;
+      
+      if (taskIndex === undefined) {
+        return res.status(400).json({ 
+          code: 'VALIDATION_ERROR', 
+          message: 'taskIndex is required' 
+        });
+      }
+      
+      const userId = req.user.id;
+      const checklist = await DMDailyChecklist.getOrCreateToday(userId);
+      
+      await checklist.completeTask(taskIndex, comment || '');
+      
+      const completionPercentage = checklist.getCompletionPercentage();
+      
+      return res.json({ 
+        checklist,
+        completionPercentage
+      });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// POST - Add new task
+router.post(
+  "/daily-checklist/add",
+  requireAuth,
+  authorize(["DigitalMarketing"]),
+  async (req, res) => {
+    try {
+      const { task, category } = req.body;
+      
+      if (!task) {
+        return res.status(400).json({ 
+          code: 'VALIDATION_ERROR', 
+          message: 'task is required' 
+        });
+      }
+      
+      const userId = req.user.id;
+      const checklist = await DMDailyChecklist.getOrCreateToday(userId);
+      
+      const newTask = {
+        task,
+        category: category || 'General',
+        order: checklist.items.length,
+        createdAt: new Date()
+      };
+      
+      checklist.items.push(newTask);
+      await checklist.save();
+      
+      const completionPercentage = checklist.getCompletionPercentage();
+      
+      return res.json({ 
+        checklist,
+        completionPercentage
+      });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// PUT - Edit existing task
+router.put(
+  "/daily-checklist/edit/:taskIndex",
+  requireAuth,
+  authorize(["DigitalMarketing"]),
+  async (req, res) => {
+    try {
+      const taskIndex = parseInt(req.params.taskIndex);
+      const { task, category } = req.body;
+      
+      if (!task) {
+        return res.status(400).json({ 
+          code: 'VALIDATION_ERROR', 
+          message: 'task is required' 
+        });
+      }
+      
+      const userId = req.user.id;
+      const checklist = await DMDailyChecklist.getOrCreateToday(userId);
+      
+      if (taskIndex < 0 || taskIndex >= checklist.items.length) {
+        return res.status(400).json({ 
+          code: 'VALIDATION_ERROR', 
+          message: 'Invalid task index' 
+        });
+      }
+      
+      checklist.items[taskIndex].task = task;
+      if (category) {
+        checklist.items[taskIndex].category = category;
+      }
+      
+      await checklist.save();
+      
+      const completionPercentage = checklist.getCompletionPercentage();
+      
+      return res.json({ 
+        checklist,
+        completionPercentage
+      });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// DELETE - Delete a task
+router.delete(
+  "/daily-checklist/delete/:taskIndex",
+  requireAuth,
+  authorize(["DigitalMarketing"]),
+  async (req, res) => {
+    try {
+      const taskIndex = parseInt(req.params.taskIndex);
+      
+      const userId = req.user.id;
+      const checklist = await DMDailyChecklist.getOrCreateToday(userId);
+      
+      if (taskIndex < 0 || taskIndex >= checklist.items.length) {
+        return res.status(400).json({ 
+          code: 'VALIDATION_ERROR', 
+          message: 'Invalid task index' 
+        });
+      }
+      
+      checklist.items.splice(taskIndex, 1);
+      await checklist.save();
+      
+      const completionPercentage = checklist.getCompletionPercentage();
+      
+      return res.json({ 
+        checklist,
+        completionPercentage
+      });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// POST - Toggle (for backward compatibility)
+router.post(
+  "/daily-checklist/toggle",
+  requireAuth,
+  authorize(["DigitalMarketing"]),
+  async (req, res) => {
+    try {
+      const { taskIndex, completed } = req.body;
+      
+      if (taskIndex === undefined) {
+        return res.status(400).json({ 
+          code: 'VALIDATION_ERROR', 
+          message: 'taskIndex is required' 
+        });
+      }
+      
+      const userId = req.user.id;
+      const checklist = await DMDailyChecklist.getOrCreateToday(userId);
+      
+      if (completed) {
+        await checklist.completeTask(taskIndex);
+      } else {
+        await checklist.uncompleteTask(taskIndex);
+      }
+      
+      const completionPercentage = checklist.getCompletionPercentage();
+      
+      return res.json({ 
+        checklist,
+        completionPercentage
+      });
+    } catch (e) {
+      return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+    }
+  }
+);
+
+// GET checklist reports/history
+router.get(
+  "/daily-checklist/reports",
+  requireAuth,
+  authorize(["DigitalMarketing", "Admin", "SuperAdmin"]),
+  async (req, res) => {
+    try {
+      const { from, to, userId: queryUserId } = req.query;
+      const isAdminOrSuper = ['Admin', 'SuperAdmin'].includes(req.user.role);
+      
+      // Build query
+      const query = {};
+      
+      // If admin/superadmin can query any user, otherwise only own data
+      if (queryUserId && isAdminOrSuper) {
+        query.userId = queryUserId;
+      } else {
+        query.userId = req.user.id;
+      }
+      
+      // Date range filter
+      if (from || to) {
+        query.date = {};
+        if (from) query.date.$gte = from;
+        if (to) query.date.$lte = to;
+      }
+      
+      const checklists = await DMDailyChecklist
+        .find(query)
+        .populate('userId', 'name email')
+        .sort({ date: -1 })
+        .limit(90); // Last 90 days max
+      
+      // Calculate stats
+      const stats = checklists.map(checklist => {
+        const totalTasks = checklist.items.length;
+        const completedTasks = checklist.items.filter(item => item.completed).length;
+        const completionPercentage = totalTasks > 0 
+          ? Math.round((completedTasks / totalTasks) * 100) 
+          : 0;
+        
+        return {
+          date: checklist.date,
+          user: checklist.userId,
+          totalTasks,
+          completedTasks,
+          incompleteTasks: totalTasks - completedTasks,
+          completionPercentage,
+          items: checklist.items
+        };
+      });
+      
+      return res.json({ reports: stats });
     } catch (e) {
       return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
     }

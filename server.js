@@ -42,7 +42,7 @@ app.use(cookieParser());
 // ---------- CORS ----------
 // In development, allow localhost on any port. In production, allow same origin.
 const corsOrigin = process.env.NODE_ENV === 'development' 
-  ? ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000']
+  ? ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:3000']
   : true;
 
 app.use(
