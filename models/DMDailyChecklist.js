@@ -60,40 +60,21 @@ dmDailyChecklistSchema.statics.getOrCreateToday = async function(userId) {
     } else {
       // First time - create default tasks for Digital Marketing
       tasks = [
-        // Hour 1 – Lead Download & OPS Assignment
-        { task: '⏰ Hour 1: Download new leads from Lead Center', category: 'Lead Management', order: 1 },
-        { task: '⏰ Hour 1: Clean duplicate/invalid numbers and categorize by course interest', category: 'Lead Management', order: 2 },
-        { task: '⏰ Hour 1: Update master lead sheet and assign leads to Admission Team in OPS', category: 'Lead Management', order: 3 },
-        { task: '⏰ Hour 1: Notify team about hot leads', category: 'Lead Management', order: 4 },
-        
-        // Hour 2 – Lead Status Monitoring & Coordination
-        { task: '⏰ Hour 2: Review yesterday\'s lead status and follow up with admission team', category: 'Lead Management', order: 5 },
-        { task: '⏰ Hour 2: Update lead sheet (Contacted/Pending/Converted) and identify follow-up gaps', category: 'Lead Management', order: 6 },
-        { task: '⏰ Hour 2: Shortlist leads for retargeting', category: 'Lead Management', order: 7 },
-        
-        // Hour 3-4 – Content Creation & Publishing
-        { task: '⏰ Hour 3-4: Script & produce 1 Reel', category: 'Content Creation', order: 8 },
-        { task: '⏰ Hour 3-4: Create 1-2 static/carousel posts with optimized captions (CTA included)', category: 'Content Creation', order: 9 },
-        { task: '⏰ Hour 3-4: Schedule content and engage within first 30 minutes of posting', category: 'Social Media', order: 10 },
-        { task: '⏰ Hour 3-4: Prepare next day content draft', category: 'Content Creation', order: 11 },
-        
-        // Hour 5 – Organic Lead Generation & Outreach
-        { task: '⏰ Hour 5: Collect 15-30 organic leads (Groups/Inbox/Directory)', category: 'Lead Management', order: 12 },
-        { task: '⏰ Hour 5: Business page outreach and corporate training prospect research', category: 'Lead Management', order: 13 },
-        { task: '⏰ Hour 5: Update CRM with new organic leads', category: 'Lead Management', order: 14 },
-        
-        // Hour 6 – Paid Campaign Monitoring & Optimization
-        { task: '⏰ Hour 6: Check Ads Manager (CPL, CTR, CPC) and monitor budget & ad fatigue', category: 'Paid Campaigns', order: 15 },
-        { task: '⏰ Hour 6: Suggest creative or audience testing and plan A/B test idea', category: 'Paid Campaigns', order: 16 },
-        
-        // Hour 7 – Competitor & Market Analysis
-        { task: '⏰ Hour 7: Monitor 3-5 competitor ads and document offer strategy', category: 'Market Research', order: 17 },
-        { task: '⏰ Hour 7: Identify trending hooks and research new campaign angles', category: 'Market Research', order: 18 },
-        
-        // Hour 8 – Funnel, Website & Reporting
-        { task: '⏰ Hour 8: Test landing page & forms, review pixel tracking', category: 'Analytics & Reporting', order: 19 },
-        { task: '⏰ Hour 8: Analyze daily performance data and prepare daily summary report', category: 'Analytics & Reporting', order: 20 },
-        { task: '⏰ Hour 8: Plan tomorrow\'s priority tasks', category: 'General', order: 21 }
+        { task: 'Download leads from Lead Center and assign to Admission Team in OPS', category: 'Lead Management', order: 1 },
+        { task: 'Review and update lead conversion status with Admission Team', category: 'Lead Management', order: 2 },
+        { task: 'Create and publish daily content across Facebook, Instagram, and LinkedIn', category: 'Content Creation', order: 3 },
+        { task: 'Create and publish at least one Reel (Facebook/Instagram)', category: 'Content Creation', order: 4 },
+        { task: 'Create and manage paid advertising campaigns across Meta (Facebook/Instagram) and LinkedIn when required', category: 'Paid Campaigns', order: 5 },
+        { task: 'Check and optimise Facebook and Google Ads performance', category: 'Analytics & Reporting', order: 6 },
+        { task: 'Manage online directory listings and update institutional profiles', category: 'General', order: 7 },
+        { task: 'Conduct Facebook & Instagram group marketing and engagement', category: 'Social Media', order: 8 },
+        { task: 'Research and collect big potential corporate/company leads', category: 'Lead Management', order: 9 },
+        { task: 'Perform competitor analysis and monitor market strategies', category: 'Market Research', order: 10 },
+        { task: 'Monitor and optimise Meta Pixel, landing pages, and conversion funnel', category: 'Analytics & Reporting', order: 11 },
+        { task: 'Monitor website traffic and analytics', category: 'Analytics & Reporting', order: 12 },
+        { task: 'Prepare daily performance report and next-day action plan', category: 'Analytics & Reporting', order: 13 },
+        { task: 'Write and publish blog posts (SEO-optimised if required)', category: 'Content Creation', order: 14 },
+        { task: 'BULK Message Through Whatsapp/Email/SMS', category: 'General', order: 15 }
       ];
     }
     
