@@ -303,10 +303,7 @@ async function updateLeadStatusHandler(req, res) {
   return res.json({ lead });
 }
 
-router.patch('/leads/:id/status', requireAuth, updateLeadStatusHandler);
-router.post('/leads/:id/status', requireAuth, updateLeadStatusHandler);
-
-// Bulk update lead status
+// Bulk update lead status - MUST be BEFORE /:id routes
 router.post('/leads/bulk-update', requireAuth, async (req, res) => {
   console.log('=== BULK UPDATE LEAD STATUS ===');
   console.log('Request body:', req.body);
@@ -411,6 +408,10 @@ router.post('/leads/bulk-update', requireAuth, async (req, res) => {
     return res.status(500).json({ code: 'SERVER_ERROR', message: error.message });
   }
 });
+
+// Single lead status update routes - AFTER bulk-update
+router.patch('/leads/:id/status', requireAuth, updateLeadStatusHandler);
+router.post('/leads/:id/status', requireAuth, updateLeadStatusHandler);
 
 // Add follow-up note (Admission only)
 router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
