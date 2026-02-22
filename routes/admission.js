@@ -30,7 +30,7 @@ router.get('/leads/counts', requireAuth, async (req, res) => {
     }
 
     // Count for each status
-    const statuses = ['Assigned', 'Counseling', 'In Follow Up', 'Admitted', 'Not Interested'];
+    const statuses = ['Assigned', 'Counseling', 'In Follow Up', 'Admitted', 'Not Interested', 'Archived'];
     const counts = {};
     
     for (const status of statuses) {
@@ -305,6 +305,112 @@ async function updateLeadStatusHandler(req, res) {
 
 router.patch('/leads/:id/status', requireAuth, updateLeadStatusHandler);
 router.post('/leads/:id/status', requireAuth, updateLeadStatusHandler);
+
+// Bulk update lead status
+router.post('/leads/bulk-update', requireAuth, async (req, res) => {
+  console.log('=== BULK UPDATE LEAD STATUS ===');
+  console.log('Request body:', req.body);
+  console.log('User:', req.user?.name, req.user?.role);
+
+  const { leadIds, status, notes } = req.body || {};
+  
+  if (!Array.isArray(leadIds) || leadIds.length === 0) {
+    return res.status(400).json({ code: 'INVALID_INPUT', message: 'leadIds must be a non-empty array' });
+  }
+
+  const allowed = ['Assigned', 'Counseling', 'In Follow Up', 'Admitted', 'Not Interested', 'Archived'];
+  if (!allowed.includes(status)) {
+    return res.status(400).json({ code: 'INVALID_STATUS', message: 'Invalid target status' });
+  }
+
+  // Check permissions
+  if (!(isAdmission(req.user) || isAdmin(req.user) || isSA(req.user) || isITAdmin(req.user))) {
+    return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
+  }
+
+  try {
+    const leads = await Lead.find({ _id: { $in: leadIds } });
+    
+    if (leads.length === 0) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'No leads found' });
+    }
+
+    // If admission user, verify they own all the leads
+    if (isAdmission(req.user)) {
+      const unauthorized = leads.some(lead => String(lead.assignedTo) !== String(req.user.id));
+      if (unauthorized) {
+        return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot update leads not assigned to you' });
+      }
+    }
+
+    const updatedLeads = [];
+    const errors = [];
+
+    for (const lead of leads) {
+      try {
+        lead.status = status;
+        
+        // Add note as follow-up if provided
+        if (notes && String(notes).trim().length > 0) {
+          lead.followUps = lead.followUps || [];
+          lead.followUps.push({ 
+            note: String(notes).trim(), 
+            at: new Date(), 
+            by: req.user.id 
+          });
+        }
+
+        // Update timestamps based on status
+        if (status === 'Counseling' && !lead.counselingAt) {
+          lead.counselingAt = new Date();
+        }
+        if (status === 'Admitted' && !lead.admittedAt) {
+          lead.admittedAt = new Date();
+        }
+
+        await lead.save();
+        updatedLeads.push(lead);
+
+        // Log activity for each lead
+        await logActivity(
+          req.user.id,
+          req.user.name,
+          req.user.email,
+          req.user.role,
+          'BULK_UPDATE',
+          'Lead',
+          `${lead.name} (${lead.leadId})`,
+          `Bulk moved to ${status}${notes ? ': ' + String(notes).trim().substring(0, 50) : ''}`
+        );
+      } catch (err) {
+        console.error(`Error updating lead ${lead._id}:`, err);
+        errors.push({ leadId: lead._id, error: err.message });
+      }
+    }
+
+    // Log overall bulk action
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'BULK_UPDATE',
+      'Lead',
+      'Bulk Operation',
+      `Bulk moved ${updatedLeads.length} lead(s) to ${status}`
+    );
+
+    return res.json({ 
+      success: true, 
+      updatedCount: updatedLeads.length, 
+      totalCount: leadIds.length,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error('Bulk update error:', error);
+    return res.status(500).json({ code: 'SERVER_ERROR', message: error.message });
+  }
+});
 
 // Add follow-up note (Admission only)
 router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {

@@ -94,7 +94,9 @@ router.post('/', requireAuth, authorize(['DigitalMarketing', 'Admission', 'Admin
 
   // Validate course name if provided
   if (interestedCourse) {
-    const course = await Course.findOne({ name: { $regex: `^${interestedCourse}$`, $options: 'i' } });
+    // Escape special regex characters to treat them as literals
+    const escapedCourse = interestedCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const course = await Course.findOne({ name: { $regex: `^${escapedCourse}$`, $options: 'i' } });
     if (!course) {
       return res.status(400).json({ code: 'INVALID_COURSE', message: `Course "${interestedCourse}" does not exist` });
     }
