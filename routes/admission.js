@@ -180,9 +180,10 @@ async function updateLeadStatusHandler(req, res) {
       lead.followUps = lead.followUps || [];
       lead.followUps.push({ note: String(notes).trim(), at: new Date(), by: req.user.id });
       
+      const LeadActivity = (await import('../models/LeadActivity.js')).default;
+      
       // If this is first counseling (from Assigned), log as counseling activity
       if (isFirstCounseling) {
-        const LeadActivity = (await import('../models/LeadActivity.js')).default;
         await LeadActivity.create({
           lead: lead._id,
           advisor: req.user.id,
@@ -210,7 +211,15 @@ async function updateLeadStatusHandler(req, res) {
         
         console.log('✅ Counseling logged successfully');
       } else {
-        // Otherwise, log as regular follow-up
+        // Already in Follow-Up, this is a subsequent follow-up - log as follow_up activity for metrics
+        await LeadActivity.create({
+          lead: lead._id,
+          advisor: req.user.id,
+          activityType: 'follow_up',
+          actionDate: new Date(),
+          note: String(notes).trim()
+        });
+        
         console.log('🔔 LOGGING FOLLOW-UP:', {
           user: req.user.name,
           lead: lead.name,
