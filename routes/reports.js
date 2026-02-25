@@ -218,8 +218,9 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     if (targetUserId) {
       const key = String(targetUserId);
       const data = map.get(key) || { counselingCount: 0, followUpCount: 0, admittedCount: 0, notAdmittedCount: 0 };
-      // Calculate total calls = new calls + follow-up calls
-      data.totalCalls = (data.counselingCount || 0) + (data.followUpCount || 0);
+      // Calculate total calls = new calls + follow-up calls + admitted + not interested
+      // Every interaction (call) results in one of these outcomes, so we sum all activities
+      data.totalCalls = (data.counselingCount || 0) + (data.followUpCount || 0) + (data.admittedCount || 0) + (data.notAdmittedCount || 0);
       
       if (format === 'csv' && (req.user.role === 'Admin' || req.user.role === 'SuperAdmin')) {
         // return CSV single row
@@ -251,7 +252,8 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     const results = [];
     for (const [key, val] of map.entries()) {
       if (key === 'unassigned') continue;
-      const totalCalls = (val.counselingCount || 0) + (val.followUpCount || 0);
+      // Calculate total calls = all call activities (new + follow-up + admitted + not interested)
+      const totalCalls = (val.counselingCount || 0) + (val.followUpCount || 0) + (val.admittedCount || 0) + (val.notAdmittedCount || 0);
       results.push({ 
         userId: key, 
         userName: usersById[key]?.name || null, 
