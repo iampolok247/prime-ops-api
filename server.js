@@ -63,6 +63,7 @@ app.use(
 );
 
 // ---------- Health check ----------
+// Multi-role system deployed
 app.get("/healthi", (req, res) =>
   res.json({ ok: true, service: "primeops-api" })
 );
