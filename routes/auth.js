@@ -10,14 +10,45 @@ const router = express.Router();
 // Login
 router.post('/login', async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, selectedRole } = req.body || {};
     const user = await User.findOne({ email, isActive: true }).select('+password');
     if (!user) return res.status(400).json({ code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' });
 
     const ok = await comparePassword(password, user.password);
     if (!ok) return res.status(400).json({ code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' });
 
-    const payload = { id: user._id.toString(), role: user.role, email: user.email, name: user.name };
+    // Determine which role to use
+    let roleToUse = user.role;
+    const availableRoles = user.roles && user.roles.length > 0 ? user.roles : [user.role];
+    
+    // If user has multiple roles and no role selected, return available roles for selection
+    if (availableRoles.length > 1 && !selectedRole) {
+      return res.json({ 
+        requiresRoleSelection: true,
+        availableRoles,
+        email: user.email,
+        name: user.name
+      });
+    }
+    
+    // If role is selected, validate and use it
+    if (selectedRole) {
+      if (!availableRoles.includes(selectedRole)) {
+        return res.status(400).json({ 
+          code: 'INVALID_ROLE', 
+          message: 'You do not have access to this role' 
+        });
+      }
+      roleToUse = selectedRole;
+    }
+
+    const payload = { 
+      id: user._id.toString(), 
+      role: roleToUse,
+      availableRoles,
+      email: user.email, 
+      name: user.name 
+    };
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
 
     // Set cookie for same-origin requests
@@ -114,6 +145,69 @@ router.post('/logout', requireAuth, async (req, res) => {
   
   res.clearCookie('token', { path: '/' });
   return res.json({ ok: true });
+});
+
+// Switch role (for multi-role users)
+router.post('/switch-role', requireAuth, async (req, res) => {
+  try {
+    const { newRole } = req.body || {};
+    if (!newRole) {
+      return res.status(400).json({ code: 'ROLE_REQUIRED', message: 'New role is required' });
+    }
+    
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
+    
+    const availableRoles = user.roles && user.roles.length > 0 ? user.roles : [user.role];
+    
+    if (!availableRoles.includes(newRole)) {
+      return res.status(403).json({ 
+        code: 'FORBIDDEN', 
+        message: 'You do not have access to this role' 
+      });
+    }
+    
+    // Create new token with switched role
+    const payload = { 
+      id: user._id.toString(), 
+      role: newRole,
+      availableRoles,
+      email: user.email, 
+      name: user.name 
+    };
+    const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '7d' });
+    
+    // Set new cookie
+    res.cookie('token', token, {
+      httpOnly: true,
+      sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      path: '/'
+    });
+    
+    // Log role switch activity
+    await logActivity(
+      user._id.toString(),
+      user.name,
+      user.email,
+      newRole,
+      'UPDATE',
+      'Auth',
+      user.email,
+      `Switched role to ${newRole}`
+    );
+    
+    return res.json({ 
+      token,
+      user: {
+        ...user.toObject(),
+        role: newRole,
+        availableRoles
+      }
+    });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
 });
 
 // Update profile (name, avatar, password change)

@@ -21,6 +21,25 @@ const UserSchema = new mongoose.Schema(
         'Coordinator'
       ]
     },
+    // Array of all roles this user has access to (for multi-role users)
+    // If empty, user has only their primary role
+    // Example: roles: ['Recruitment', 'Admission'] means user can switch between these roles
+    roles: {
+      type: [String],
+      enum: [
+        'SuperAdmin',
+        'Admin',
+        'ITAdmin',
+        'Accountant',
+        'Admission',
+        'Recruitment',
+        'DigitalMarketing',
+        'MotionGraphics',
+        'HeadOfCreative',
+        'Coordinator'
+      ],
+      default: []
+    },
     department: { type: String },
     designation: { type: String },
     phone: { type: String, default: '' }, // <-- NEW
