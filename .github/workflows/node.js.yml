@@ -55,10 +55,18 @@ jobs:
             -e "ssh -i ~/.ssh/id_rsa -p ${{ secrets.SSH_PORT }} -o StrictHostKeyChecking=yes" \
             ./ "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.TARGET_DIR }}/"
 
-      - name: Install production deps and restart PM2
+      - name: Create .env and restart PM2
         run: |
           ssh -i ~/.ssh/id_rsa \
             -p "${{ secrets.SSH_PORT }}" \
             -o StrictHostKeyChecking=yes \
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
-            "cd '${{ secrets.TARGET_DIR }}' && npm ci --omit=dev && pm2 restart prime.server || pm2 start server.js --name prime.server && pm2 save"
+            "cd '${{ secrets.TARGET_DIR }}' && \
+             echo 'MONGO_URI=${{ secrets.MONGO_URI }}' > .env && \
+             echo 'JWT_SECRET=${{ secrets.JWT_SECRET }}' >> .env && \
+             echo 'PORT=5001' >> .env && \
+             echo 'NODE_ENV=production' >> .env && \
+             npm ci --omit=dev && \
+             pm2 delete prime.server || true && \
+             pm2 start ecosystem.config.cjs && \
+             pm2 save"
