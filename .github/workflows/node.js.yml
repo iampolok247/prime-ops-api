@@ -6,37 +6,59 @@ on:
       - main
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Use Node.js 22
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: npm ci
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
+      - name: Configure SSH
+        run: |
+          test -n "${{ secrets.VPS_DEPLOY_KEY }}" || { echo "Missing secret: VPS_DEPLOY_KEY"; exit 1; }
+          test -n "${{ secrets.SERVER_HOST }}" || { echo "Missing secret: SERVER_HOST"; exit 1; }
+          test -n "${{ secrets.SSH_PORT }}" || { echo "Missing secret: SSH_PORT"; exit 1; }
+          test -n "${{ secrets.SERVER_USER }}" || { echo "Missing secret: SERVER_USER"; exit 1; }
+          test -n "${{ secrets.TARGET_DIR }}" || { echo "Missing secret: TARGET_DIR"; exit 1; }
 
-    steps:
-      - name: Deploy to VPS
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.VPS_DEPLOY_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          script: |
-            set -e
-            cd ${{ secrets.TARGET_DIR }}
-            git pull origin main
-            npm ci --omit=dev
-            pm2 restart prime.server || pm2 start server.js --name prime.server
-            pm2 save
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.VPS_DEPLOY_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ secrets.SSH_PORT }}" -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Ensure target directory exists
+        run: |
+          ssh -i ~/.ssh/id_rsa \
+            -p "${{ secrets.SSH_PORT }}" \
+            -o StrictHostKeyChecking=yes \
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "mkdir -p '${{ secrets.TARGET_DIR }}'"
+
+      - name: Deploy files to VPS
+        run: |
+          rsync -az --delete \
+            --exclude ".git" \
+            --exclude "node_modules" \
+            --exclude ".github" \
+            --exclude ".env" \
+            -e "ssh -i ~/.ssh/id_rsa -p ${{ secrets.SSH_PORT }} -o StrictHostKeyChecking=yes" \
+            ./ "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.TARGET_DIR }}/"
+
+      - name: Install production deps and restart PM2
+        run: |
+          ssh -i ~/.ssh/id_rsa \
+            -p "${{ secrets.SSH_PORT }}" \
+            -o StrictHostKeyChecking=yes \
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
+            "cd '${{ secrets.TARGET_DIR }}' && npm ci --omit=dev && pm2 restart prime.server || pm2 start server.js --name prime.server && pm2 save"
