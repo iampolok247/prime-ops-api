@@ -31,6 +31,7 @@ import activitiesRoutes from "./routes/activities.js";
 import previousIncomeRoutes from "./routes/previousIncome.js";
 import requisitionsRoutes from "./routes/requisitions.js"; // Requisition system for all employees
 import recruitmentDuesRoutes from "./routes/recruitmentDues.js"; // Recruitment due collection
+import manualDuesRoutes from "./routes/manualDues.js"; // Manual due entry for coordinator
 
 dotenv.config();
 
@@ -113,6 +114,7 @@ app.use("/api/activities", activitiesRoutes);
 app.use("/api/previous-income", previousIncomeRoutes);
 app.use("/api/requisitions", requisitionsRoutes);
 app.use("/api/recruitment-dues", recruitmentDuesRoutes);
+app.use("/api/manual-dues", manualDuesRoutes);
 
 // ---------- 404 Handler ----------
 app.use((req, res) => {
