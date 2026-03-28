@@ -28,6 +28,8 @@ import tadaRoutes from "./routes/tada.js";
 import notificationRoutes from "./routes/notifications.js";
 import bankRoutes from "./routes/bank.js";
 import activitiesRoutes from "./routes/activities.js";
+import previousIncomeRoutes from "./routes/previousIncome.js";
+import requisitionsRoutes from "./routes/requisitions.js";
 
 dotenv.config();
 
@@ -40,27 +42,44 @@ app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
 
 // ---------- CORS ----------
-// In development, allow localhost on any port. In production, allow same origin.
-const corsOrigin = process.env.NODE_ENV === 'development' 
-  ? ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:3000']
-  : ['https://ops.primeacademy.org', 'https://www.ops.primeacademy.org', 'https://ops-backend.primeacademy.org'];
+// Use a whitelist and echo the incoming origin when allowed. Also explicitly
+// handle preflight OPTIONS for all routes so proxies or load-balancers don't
+// end up returning responses without CORS headers.
+const defaultAllowed = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:3000',
+  'https://ops.primeacademy.org',
+  'https://www.ops.primeacademy.org',
+  'https://ops-backend.primeacademy.org'
+];
 
-app.use(
-  cors({
-    origin: corsOrigin,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-      "Origin",
-    ],
-    exposedHeaders: ["Content-Range", "X-Content-Range"],
-    maxAge: 86400, // 24 hours
-  })
-);
+const rawClient = process.env.CLIENT_ORIGIN || process.env.CLIENT_ORIGINS;
+const whitelist = rawClient ? rawClient.split(',').map(s => s.trim()) : defaultAllowed;
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like curl, server-to-server)
+    if (!origin) return callback(null, true);
+    if (whitelist.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+    console.warn('[CORS] Rejected origin:', origin);
+    return callback(new Error('Not allowed by CORS'), false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400
+};
+
+// TEMP: permissive CORS to restore connectivity while debugging 502.
+// This allows any origin and returns CORS headers for preflight. Replace
+// with a stricter whitelist once the origin health is confirmed.
+app.use(cors({ origin: true, credentials: true }));
+app.options('*', cors({ origin: true, credentials: true }));
 
 // ---------- Health check ----------
 // Multi-role system deployed
@@ -90,6 +109,8 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/recruitment", recruitmentRoutes);
 app.use("/api/bank", bankRoutes);
 app.use("/api/activities", activitiesRoutes);
+app.use("/api/previous-income", previousIncomeRoutes);
+app.use("/api/requisitions", requisitionsRoutes);
 
 // ---------- 404 Handler ----------
 app.use((req, res) => {

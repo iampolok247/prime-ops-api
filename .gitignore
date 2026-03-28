@@ -5,8 +5,8 @@ jspm_packages/
 # Environment Variables
 .env
 .env.*
-!.env.example
-!.env.sample
+.env.example
+.env.sample
 
 # Logs
 npm-debug.log*
