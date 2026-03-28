@@ -5,13 +5,71 @@ import { authorize } from '../middleware/authorize.js';
 
 const router = express.Router();
 
+// ========== STATIC ROUTES FIRST (before /:id) ==========
+
+// Get approved requisitions for Accountant (pending payment)
+router.get('/approved', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
+  try {
+    const requisitions = await Requisition.find({ status: 'Approved' })
+      .populate('requestedBy', 'name email role designation')
+      .populate('verifiedBy', 'name')
+      .populate('approvedBy', 'name')
+      .sort({ approvedAt: -1 });
+    
+    res.json({ requisitions });
+  } catch (err) {
+    console.error('Error fetching approved requisitions:', err);
+    res.status(500).json({ message: 'Failed to fetch approved requisitions' });
+  }
+});
+
+// Get paid requisitions history
+router.get('/paid', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
+  try {
+    const requisitions = await Requisition.find({ status: 'Paid' })
+      .populate('requestedBy', 'name email role designation')
+      .populate('approvedBy', 'name')
+      .populate('paidBy', 'name')
+      .sort({ paidAt: -1 });
+    
+    res.json({ requisitions });
+  } catch (err) {
+    console.error('Error fetching paid requisitions:', err);
+    res.status(500).json({ message: 'Failed to fetch paid requisitions' });
+  }
+});
+
+// Get pending count for admin badge
+router.get('/stats/pending', requireAuth, authorize('Admin', 'SuperAdmin'), async (req, res) => {
+  try {
+    const pendingCount = await Requisition.countDocuments({ status: 'Pending' });
+    res.json({ pendingCount });
+  } catch (err) {
+    console.error('Error fetching pending count:', err);
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
+
+// Get approved count for accountant badge
+router.get('/stats/approved', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
+  try {
+    const approvedCount = await Requisition.countDocuments({ status: 'Approved' });
+    res.json({ approvedCount });
+  } catch (err) {
+    console.error('Error fetching approved count:', err);
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
+
+// ========== MAIN ROUTES ==========
+
 // Get all requisitions (Admin/SuperAdmin see all, others see their own)
 router.get('/', requireAuth, async (req, res) => {
   try {
     let query = {};
     
-    // If not Admin/SuperAdmin, only show user's own requisitions
-    if (!['Admin', 'SuperAdmin'].includes(req.user.role)) {
+    // If not Admin/SuperAdmin/Accountant, only show user's own requisitions
+    if (!['Admin', 'SuperAdmin', 'Accountant'].includes(req.user.role)) {
       query.requestedBy = req.user._id;
     }
     
@@ -19,37 +77,13 @@ router.get('/', requireAuth, async (req, res) => {
       .populate('requestedBy', 'name email role designation')
       .populate('verifiedBy', 'name')
       .populate('approvedBy', 'name')
+      .populate('paidBy', 'name')
       .sort({ createdAt: -1 });
     
     res.json({ requisitions });
   } catch (err) {
     console.error('Error fetching requisitions:', err);
     res.status(500).json({ message: 'Failed to fetch requisitions' });
-  }
-});
-
-// Get single requisition
-router.get('/:id', requireAuth, async (req, res) => {
-  try {
-    const requisition = await Requisition.findById(req.params.id)
-      .populate('requestedBy', 'name email role designation')
-      .populate('verifiedBy', 'name')
-      .populate('approvedBy', 'name');
-    
-    if (!requisition) {
-      return res.status(404).json({ message: 'Requisition not found' });
-    }
-    
-    // Check if user can view this requisition
-    if (!['Admin', 'SuperAdmin'].includes(req.user.role) && 
-        requisition.requestedBy._id.toString() !== req.user._id.toString()) {
-      return res.status(403).json({ message: 'Not authorized to view this requisition' });
-    }
-    
-    res.json(requisition);
-  } catch (err) {
-    console.error('Error fetching requisition:', err);
-    res.status(500).json({ message: 'Failed to fetch requisition' });
   }
 });
 
@@ -79,6 +113,34 @@ router.post('/', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('Error creating requisition:', err);
     res.status(500).json({ message: 'Failed to create requisition' });
+  }
+});
+
+// ========== DYNAMIC ROUTES (/:id) LAST ==========
+
+// Get single requisition
+router.get('/:id', requireAuth, async (req, res) => {
+  try {
+    const requisition = await Requisition.findById(req.params.id)
+      .populate('requestedBy', 'name email role designation')
+      .populate('verifiedBy', 'name')
+      .populate('approvedBy', 'name')
+      .populate('paidBy', 'name');
+    
+    if (!requisition) {
+      return res.status(404).json({ message: 'Requisition not found' });
+    }
+    
+    // Check if user can view this requisition
+    if (!['Admin', 'SuperAdmin', 'Accountant'].includes(req.user.role) && 
+        requisition.requestedBy._id.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Not authorized to view this requisition' });
+    }
+    
+    res.json(requisition);
+  } catch (err) {
+    console.error('Error fetching requisition:', err);
+    res.status(500).json({ message: 'Failed to fetch requisition' });
   }
 });
 
@@ -125,68 +187,6 @@ router.patch('/:id/status', requireAuth, authorize('Admin', 'SuperAdmin'), async
   }
 });
 
-// Delete requisition (only own pending requisitions, or Admin/SuperAdmin)
-router.delete('/:id', requireAuth, async (req, res) => {
-  try {
-    const requisition = await Requisition.findById(req.params.id);
-    
-    if (!requisition) {
-      return res.status(404).json({ message: 'Requisition not found' });
-    }
-    
-    // Check permissions
-    const isOwner = requisition.requestedBy.toString() === req.user._id.toString();
-    const isAdmin = ['Admin', 'SuperAdmin'].includes(req.user.role);
-    
-    if (!isOwner && !isAdmin) {
-      return res.status(403).json({ message: 'Not authorized to delete this requisition' });
-    }
-    
-    // Only allow deletion of pending requisitions (unless admin)
-    if (!isAdmin && requisition.status !== 'Pending') {
-      return res.status(400).json({ message: 'Can only delete pending requisitions' });
-    }
-    
-    await Requisition.findByIdAndDelete(req.params.id);
-    res.json({ message: 'Requisition deleted' });
-  } catch (err) {
-    console.error('Error deleting requisition:', err);
-    res.status(500).json({ message: 'Failed to delete requisition' });
-  }
-});
-
-// Get approved requisitions for Accountant (pending payment)
-router.get('/approved', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
-  try {
-    const requisitions = await Requisition.find({ status: 'Approved' })
-      .populate('requestedBy', 'name email role designation')
-      .populate('verifiedBy', 'name')
-      .populate('approvedBy', 'name')
-      .sort({ approvedAt: -1 });
-    
-    res.json({ requisitions });
-  } catch (err) {
-    console.error('Error fetching approved requisitions:', err);
-    res.status(500).json({ message: 'Failed to fetch approved requisitions' });
-  }
-});
-
-// Get paid requisitions history
-router.get('/paid', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
-  try {
-    const requisitions = await Requisition.find({ status: 'Paid' })
-      .populate('requestedBy', 'name email role designation')
-      .populate('approvedBy', 'name')
-      .populate('paidBy', 'name')
-      .sort({ paidAt: -1 });
-    
-    res.json({ requisitions });
-  } catch (err) {
-    console.error('Error fetching paid requisitions:', err);
-    res.status(500).json({ message: 'Failed to fetch paid requisitions' });
-  }
-});
-
 // Mark requisition as Paid (Accountant only)
 router.patch('/:id/pay', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
   try {
@@ -224,25 +224,33 @@ router.patch('/:id/pay', requireAuth, authorize('Accountant', 'Admin', 'SuperAdm
   }
 });
 
-// Get pending count for admin badge
-router.get('/stats/pending', requireAuth, authorize('Admin', 'SuperAdmin'), async (req, res) => {
+// Delete requisition (only own pending requisitions, or Admin/SuperAdmin)
+router.delete('/:id', requireAuth, async (req, res) => {
   try {
-    const pendingCount = await Requisition.countDocuments({ status: 'Pending' });
-    res.json({ pendingCount });
+    const requisition = await Requisition.findById(req.params.id);
+    
+    if (!requisition) {
+      return res.status(404).json({ message: 'Requisition not found' });
+    }
+    
+    // Check permissions
+    const isOwner = requisition.requestedBy.toString() === req.user._id.toString();
+    const isAdmin = ['Admin', 'SuperAdmin'].includes(req.user.role);
+    
+    if (!isOwner && !isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to delete this requisition' });
+    }
+    
+    // Only allow deletion of pending requisitions (unless admin)
+    if (!isAdmin && requisition.status !== 'Pending') {
+      return res.status(400).json({ message: 'Can only delete pending requisitions' });
+    }
+    
+    await Requisition.findByIdAndDelete(req.params.id);
+    res.json({ message: 'Requisition deleted' });
   } catch (err) {
-    console.error('Error fetching pending count:', err);
-    res.status(500).json({ message: 'Failed to fetch stats' });
-  }
-});
-
-// Get approved count for accountant badge
-router.get('/stats/approved', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
-  try {
-    const approvedCount = await Requisition.countDocuments({ status: 'Approved' });
-    res.json({ approvedCount });
-  } catch (err) {
-    console.error('Error fetching approved count:', err);
-    res.status(500).json({ message: 'Failed to fetch stats' });
+    console.error('Error deleting requisition:', err);
+    res.status(500).json({ message: 'Failed to delete requisition' });
   }
 });
 
