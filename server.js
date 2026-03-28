@@ -40,27 +40,49 @@ app.use(express.json({ limit: "5mb" }));
 app.use(cookieParser());
 
 // ---------- CORS ----------
-// In development, allow localhost on any port. In production, allow same origin.
-const corsOrigin = process.env.NODE_ENV === 'development' 
-  ? ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175', 'http://localhost:3000']
-  : ['https://ops.primeacademy.org', 'https://www.ops.primeacademy.org', 'https://ops-backend.primeacademy.org'];
+// Use a whitelist and echo the incoming origin when allowed. Also explicitly
+// handle preflight OPTIONS for all routes so proxies or load-balancers don't
+// end up returning responses without CORS headers.
+const defaultAllowed = [
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:5175',
+  'http://localhost:3000',
+  'https://ops.primeacademy.org',
+  'https://www.ops.primeacademy.org',
+  'https://ops-backend.primeacademy.org'
+];
 
-app.use(
-  cors({
-    origin: corsOrigin,
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: [
-      "Content-Type",
-      "Authorization",
-      "X-Requested-With",
-      "Accept",
-      "Origin",
-    ],
-    exposedHeaders: ["Content-Range", "X-Content-Range"],
-    maxAge: 86400, // 24 hours
-  })
-);
+const rawClient = process.env.CLIENT_ORIGIN || process.env.CLIENT_ORIGINS;
+const whitelist = rawClient ? rawClient.split(',').map(s => s.trim()) : defaultAllowed;
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow requests with no origin (like curl, server-to-server)
+    if (!origin) return callback(null, true);
+    if (whitelist.indexOf(origin) !== -1) {
+      return callback(null, true);
+    }
+    console.warn('[CORS] Rejected origin:', origin);
+    return callback(new Error('Not allowed by CORS'), false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+  exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  maxAge: 86400
+};
+
+app.use((req, res, next) => {
+  // quick log for debugging CORS preflight issues in production
+  if (req.method === 'OPTIONS') {
+    console.log('[CORS] Preflight request for:', req.originalUrl, 'Origin:', req.headers.origin);
+  }
+  next();
+});
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // ---------- Health check ----------
 // Multi-role system deployed
