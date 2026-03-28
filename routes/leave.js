@@ -111,28 +111,29 @@ router.post('/', requireAuth, authorize(['Admin', 'Accountant', 'Admission', 'Re
 
     // Send notification to all admins about new leave application
     try {
-      const admins = await User.find({ role: { $in: ['Admin', 'SuperAdmin'] }, isActive: true });
-      console.log('📢 Found', admins.length, 'admins to notify:', admins.map(a => `${a.name} (${a._id})`).join(', '));
+      // First notify Accountants for primary approval
+      const accountants = await User.find({ role: 'Accountant', isActive: true });
+      console.log('📢 Found', accountants.length, 'accountants to notify for primary approval');
       
-      for (const admin of admins) {
+      for (const accountant of accountants) {
         try {
-          const adminNotif = await createNotification({
-            recipient: admin._id,
+          const accNotif = await createNotification({
+            recipient: accountant._id,
             sender: req.user.id,
             type: 'LEAVE_SUBMITTED',
-            title: 'New Leave Application',
-            message: `${req.user.name} has submitted a ${leaveType} application for ${totalDays} days`,
-            link: `/admin/approvals`,
+            title: 'New Leave Application - Primary Approval Needed',
+            message: `${req.user.name} has submitted a ${leaveType} application for ${totalDays} days. Please review for primary approval.`,
+            link: `/accounting/leave-approval`,
             relatedModel: 'LeaveApplication',
             relatedId: application._id
           });
-          console.log('✅ Admin notification created for:', admin.name, 'with ID:', adminNotif._id);
-        } catch (adminNotifError) {
-          console.error('❌ Failed to create admin notification for', admin.name, ':', adminNotifError);
+          console.log('✅ Accountant notification created for:', accountant.name, 'with ID:', accNotif._id);
+        } catch (accNotifError) {
+          console.error('❌ Failed to create accountant notification for', accountant.name, ':', accNotifError);
         }
       }
-    } catch (adminsError) {
-      console.error('❌ Failed to fetch admins:', adminsError);
+    } catch (accountantsError) {
+      console.error('❌ Failed to fetch accountants:', accountantsError);
     }
 
     return res.status(201).json({ application: populated });
@@ -302,17 +303,24 @@ router.patch('/:id/handover/deny', requireAuth, async (req, res) => {
 });
 
 // Admin: Get all leave applications (with optional status filter)
+// Shows: all applications OR only primary-approved ones for final review
 router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res) => {
   try {
-    const { status } = req.query;
+    const { status, primaryApproved } = req.query;
     const query = {};
     if (status) query.status = status;
+    // For Admin final approval view - only show primary approved applications
+    if (primaryApproved === 'true') {
+      query.primaryStatus = 'Approved';
+      query.status = 'Pending';
+    }
 
     const applications = await LeaveApplication.find(query)
       .sort({ createdAt: -1 })
       .populate('employee', 'name email role')
       .populate('handoverTo', 'name email role')
       .populate('reviewedBy', 'name email role')
+      .populate('primaryReviewedBy', 'name email role')
       .populate('detailsRequestedBy', 'name email role');
 
     return res.json({ applications });
@@ -321,7 +329,148 @@ router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res
   }
 });
 
-// Admin: Approve leave application
+// Accountant: Get pending leave applications for primary approval
+router.get('/primary-pending', requireAuth, authorize(['Accountant']), async (req, res) => {
+  try {
+    const applications = await LeaveApplication.find({ 
+      primaryStatus: 'Pending',
+      status: 'Pending'
+    })
+      .sort({ createdAt: -1 })
+      .populate('employee', 'name email role')
+      .populate('handoverTo', 'name email role')
+      .populate('reviewedBy', 'name email role')
+      .populate('primaryReviewedBy', 'name email role');
+
+    return res.json({ applications });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// Accountant: Primary approve leave application
+router.patch('/:id/primary-approve', requireAuth, authorize(['Accountant']), async (req, res) => {
+  try {
+    const { primaryReviewNote } = req.body;
+    const application = await LeaveApplication.findById(req.params.id);
+
+    if (!application) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'Application not found' });
+    }
+
+    if (application.primaryStatus !== 'Pending') {
+      return res.status(400).json({ code: 'ALREADY_REVIEWED', message: 'Application already reviewed' });
+    }
+
+    application.primaryStatus = 'Approved';
+    application.primaryReviewedBy = req.user.id;
+    application.primaryReviewedAt = new Date();
+    if (primaryReviewNote) application.primaryReviewNote = primaryReviewNote;
+
+    await application.save();
+
+    const populated = await LeaveApplication.findById(application._id)
+      .populate('employee', 'name email role')
+      .populate('handoverTo', 'name email role')
+      .populate('reviewedBy', 'name email role')
+      .populate('primaryReviewedBy', 'name email role');
+
+    // Notify the employee
+    try {
+      await createNotification({
+        recipient: application.employee,
+        sender: req.user.id,
+        type: 'LEAVE_PRIMARY_APPROVED',
+        title: 'Leave Application - Primary Approval',
+        message: `Your leave application has been approved by Accountant (${req.user.name}) and sent to Admin for final approval`,
+        link: `/my-applications`,
+        relatedModel: 'LeaveApplication',
+        relatedId: application._id
+      });
+    } catch (notifError) {
+      console.error('❌ Failed to send notification:', notifError);
+    }
+
+    // Notify Admins that application is ready for final approval
+    try {
+      const admins = await User.find({ role: { $in: ['Admin', 'SuperAdmin'] }, isActive: true });
+      for (const admin of admins) {
+        await createNotification({
+          recipient: admin._id,
+          sender: req.user.id,
+          type: 'LEAVE_READY_FOR_FINAL',
+          title: 'Leave Application Ready for Final Approval',
+          message: `${populated.employee.name}'s leave application has been approved by Accountant and is ready for your final approval`,
+          link: `/admin/approvals`,
+          relatedModel: 'LeaveApplication',
+          relatedId: application._id
+        });
+      }
+    } catch (notifError) {
+      console.error('❌ Failed to send admin notifications:', notifError);
+    }
+
+    return res.json({ application: populated });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// Accountant: Primary reject leave application
+router.patch('/:id/primary-reject', requireAuth, authorize(['Accountant']), async (req, res) => {
+  try {
+    const { primaryReviewNote } = req.body;
+    const application = await LeaveApplication.findById(req.params.id);
+
+    if (!application) {
+      return res.status(404).json({ code: 'NOT_FOUND', message: 'Application not found' });
+    }
+
+    if (application.primaryStatus !== 'Pending') {
+      return res.status(400).json({ code: 'ALREADY_REVIEWED', message: 'Application already reviewed' });
+    }
+
+    if (!primaryReviewNote) {
+      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Rejection reason is required' });
+    }
+
+    application.primaryStatus = 'Rejected';
+    application.status = 'Rejected'; // Also reject final status
+    application.primaryReviewedBy = req.user.id;
+    application.primaryReviewedAt = new Date();
+    application.primaryReviewNote = primaryReviewNote;
+
+    await application.save();
+
+    const populated = await LeaveApplication.findById(application._id)
+      .populate('employee', 'name email role')
+      .populate('handoverTo', 'name email role')
+      .populate('reviewedBy', 'name email role')
+      .populate('primaryReviewedBy', 'name email role');
+
+    // Notify the employee
+    try {
+      await createNotification({
+        recipient: application.employee,
+        sender: req.user.id,
+        type: 'LEAVE_PRIMARY_REJECTED',
+        title: 'Leave Application Rejected',
+        message: `Your leave application has been rejected by Accountant (${req.user.name}). Reason: ${primaryReviewNote}`,
+        link: `/my-applications`,
+        relatedModel: 'LeaveApplication',
+        relatedId: application._id
+      });
+    } catch (notifError) {
+      console.error('❌ Failed to send notification:', notifError);
+    }
+
+    return res.json({ application: populated });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// Admin: Approve leave application (Final approval - only after primary approval)
 router.patch('/:id/approve', requireAuth, authorize(['Admin']), async (req, res) => {
   try {
     const { reviewNote } = req.body;
@@ -329,6 +478,10 @@ router.patch('/:id/approve', requireAuth, authorize(['Admin']), async (req, res)
 
     if (!application) {
       return res.status(404).json({ code: 'NOT_FOUND', message: 'Application not found' });
+    }
+
+    if (application.primaryStatus !== 'Approved') {
+      return res.status(400).json({ code: 'PRIMARY_NOT_APPROVED', message: 'Application needs primary approval from Accountant first' });
     }
 
     if (application.status !== 'Pending') {
@@ -345,7 +498,8 @@ router.patch('/:id/approve', requireAuth, authorize(['Admin']), async (req, res)
     const populated = await LeaveApplication.findById(application._id)
       .populate('employee', 'name email role')
       .populate('handoverTo', 'name email role')
-      .populate('reviewedBy', 'name email role');
+      .populate('reviewedBy', 'name email role')
+      .populate('primaryReviewedBy', 'name email role');
 
     // Notify the employee
     try {
@@ -355,7 +509,7 @@ router.patch('/:id/approve', requireAuth, authorize(['Admin']), async (req, res)
         sender: req.user.id,
         type: 'LEAVE_APPROVED',
         title: 'Leave Application Approved',
-        message: `Your leave application has been approved by ${req.user.name}`,
+        message: `Your leave application has been finally approved by ${req.user.name}`,
         link: `/my-applications`,
         relatedModel: 'LeaveApplication',
         relatedId: application._id
@@ -371,7 +525,7 @@ router.patch('/:id/approve', requireAuth, authorize(['Admin']), async (req, res)
   }
 });
 
-// Admin: Reject leave application
+// Admin: Reject leave application (Final rejection - only after primary approval)
 router.patch('/:id/reject', requireAuth, authorize(['Admin']), async (req, res) => {
   try {
     const { reviewNote } = req.body;
@@ -379,6 +533,10 @@ router.patch('/:id/reject', requireAuth, authorize(['Admin']), async (req, res) 
 
     if (!application) {
       return res.status(404).json({ code: 'NOT_FOUND', message: 'Application not found' });
+    }
+
+    if (application.primaryStatus !== 'Approved') {
+      return res.status(400).json({ code: 'PRIMARY_NOT_APPROVED', message: 'Application needs primary approval from Accountant first' });
     }
 
     if (application.status !== 'Pending') {
@@ -399,7 +557,8 @@ router.patch('/:id/reject', requireAuth, authorize(['Admin']), async (req, res) 
     const populated = await LeaveApplication.findById(application._id)
       .populate('employee', 'name email role')
       .populate('handoverTo', 'name email role')
-      .populate('reviewedBy', 'name email role');
+      .populate('reviewedBy', 'name email role')
+      .populate('primaryReviewedBy', 'name email role');
 
     // Notify the employee
     try {
@@ -426,7 +585,7 @@ router.patch('/:id/reject', requireAuth, authorize(['Admin']), async (req, res) 
 });
 
 // Admin: Request more details for leave application
-router.patch('/:id/request-details', requireAuth, authorize(['Admin']), async (req, res) => {
+router.patch('/:id/request-details', requireAuth, authorize(['Admin', 'Accountant']), async (req, res) => {
   try {
     const { detailsRequested } = req.body;
     const application = await LeaveApplication.findById(req.params.id);

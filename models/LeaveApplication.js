@@ -45,6 +45,24 @@ const LeaveApplicationSchema = new mongoose.Schema(
     handoverNote: {
       type: String
     },
+    // Primary Approval by Accountant
+    primaryStatus: {
+      type: String,
+      enum: ['Pending', 'Approved', 'Rejected'],
+      default: 'Pending',
+      index: true
+    },
+    primaryReviewedBy: { 
+      type: mongoose.Schema.Types.ObjectId, 
+      ref: 'User' 
+    },
+    primaryReviewedAt: { 
+      type: Date 
+    },
+    primaryReviewNote: { 
+      type: String 
+    },
+    // Final Approval by Admin
     status: {
       type: String,
       enum: ['Pending', 'Approved', 'Rejected'],
