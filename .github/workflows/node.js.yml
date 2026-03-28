@@ -10,18 +10,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1. Checkout
+      # 1. Checkout code
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      # 2. Setup Node
+      # 2. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
-      # 3. Install dependencies (for build/test if needed)
+      # 3. Install dependencies (optional for CI validation)
       - name: Install Dependencies
         run: npm ci
 
@@ -38,6 +38,7 @@ jobs:
           chmod 700 ~/.ssh
           echo "${{ secrets.VPS_DEPLOY_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
+
           ssh-keyscan -p "${{ secrets.SSH_PORT }}" -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
@@ -50,7 +51,7 @@ jobs:
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
             "mkdir -p '${{ secrets.TARGET_DIR }}'"
 
-      # 6. Deploy files
+      # 6. Deploy files to VPS
       - name: Deploy files to VPS
         run: |
           rsync -az --delete \
@@ -67,19 +68,25 @@ jobs:
           ssh -i ~/.ssh/id_rsa \
             -p "${{ secrets.SSH_PORT }}" \
             -o StrictHostKeyChecking=yes \
-            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << 'EOF'
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << EOF
 
-            cd '${{ secrets.TARGET_DIR }}'
+            cd "${{ secrets.TARGET_DIR }}"
 
-            echo "MONGO_URI=${{ secrets.MONGO_URI }}" > .env
-            echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
-            echo "PORT=5001" >> .env
-            echo "NODE_ENV=production" >> .env
+            # Create .env safely
+            cat <<EOT > .env
+            MONGO_URI=${{ secrets.MONGO_URI }}
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            PORT=5001
+            NODE_ENV=production
+            EOT
 
+            # Install production dependencies
             npm ci --omit=dev
 
-            pm2 delete prime.server || true
-            pm2 start ecosystem.config.cjs
+            # Restart PM2 (no downtime if already running)
+            pm2 restart prime.server || pm2 start ecosystem.config.cjs
+
+            # Save PM2 process list
             pm2 save
 
             EOF
