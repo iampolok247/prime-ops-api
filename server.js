@@ -73,16 +73,11 @@ const corsOptions = {
   maxAge: 86400
 };
 
-app.use((req, res, next) => {
-  // quick log for debugging CORS preflight issues in production
-  if (req.method === 'OPTIONS') {
-    console.log('[CORS] Preflight request for:', req.originalUrl, 'Origin:', req.headers.origin);
-  }
-  next();
-});
-
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+// TEMP: permissive CORS to restore connectivity while debugging 502.
+// This allows any origin and returns CORS headers for preflight. Replace
+// with a stricter whitelist once the origin health is confirmed.
+app.use(cors({ origin: true, credentials: true }));
+app.options('*', cors({ origin: true, credentials: true }));
 
 // ---------- Health check ----------
 // Multi-role system deployed
