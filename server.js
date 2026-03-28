@@ -149,3 +149,4 @@ connectDB(process.env.MONGO_URI)
     console.error("❌ DB connection failed:", err.message);
     process.exit(1);
   });
+// CI/CD trigger - Sun Mar 29 02:00:15 +06 2026
