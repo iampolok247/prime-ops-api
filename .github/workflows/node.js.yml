@@ -66,27 +66,27 @@ jobs:
       - name: Setup ENV and Restart Backend
         run: |
           ssh -i ~/.ssh/id_rsa \
-            -p "${{ secrets.SSH_PORT }}" \
-            -o StrictHostKeyChecking=yes \
-            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << EOF
+          -p "${{ secrets.SSH_PORT }}" \
+          -o StrictHostKeyChecking=yes \
+          "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << EOF
 
-            cd "${{ secrets.TARGET_DIR }}"
+          cd "${{ secrets.TARGET_DIR }}"
 
-            # Create .env safely
-            cat <<EOT > .env
-            MONGO_URI=${{ secrets.MONGO_URI }}
-            JWT_SECRET=${{ secrets.JWT_SECRET }}
-            PORT=5001
-            NODE_ENV=production
-            EOT
+          # Create .env safely
+          cat <<EOT > .env
+          MONGO_URI=${{ secrets.MONGO_URI }}
+          JWT_SECRET=${{ secrets.JWT_SECRET }}
+          PORT=5001
+          NODE_ENV=production
+          EOT
 
-            # Install production dependencies
-            npm ci --omit=dev
+          # Install production dependencies
+          npm ci --omit=dev
 
-            # Restart PM2 (no downtime if already running)
-            pm2 restart prime.server || pm2 start ecosystem.config.cjs
+          # Restart PM2 (no downtime if already running)
+          pm2 restart prime.server || pm2 start ecosystem.config.cjs
 
-            # Save PM2 process list
-            pm2 save
+          # Save PM2 process list
+          pm2 save
 
-            EOF
+          EOF
