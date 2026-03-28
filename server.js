@@ -29,7 +29,7 @@ import notificationRoutes from "./routes/notifications.js";
 import bankRoutes from "./routes/bank.js";
 import activitiesRoutes from "./routes/activities.js";
 import previousIncomeRoutes from "./routes/previousIncome.js";
-import requisitionsRoutes from "./routes/requisitions.js"; // Requisition system
+import requisitionsRoutes from "./routes/requisitions.js"; // Requisition system for all employees
 
 dotenv.config();
 
