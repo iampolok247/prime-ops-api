@@ -10,25 +10,29 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Checkout
       - name: Checkout Code
         uses: actions/checkout@v4
 
+      # 2. Setup Node
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
+      # 3. Install dependencies (for build/test if needed)
       - name: Install Dependencies
         run: npm ci
 
+      # 4. Configure SSH
       - name: Configure SSH
         run: |
-          test -n "${{ secrets.VPS_DEPLOY_KEY }}" || { echo "Missing secret: VPS_DEPLOY_KEY"; exit 1; }
-          test -n "${{ secrets.SERVER_HOST }}" || { echo "Missing secret: SERVER_HOST"; exit 1; }
-          test -n "${{ secrets.SSH_PORT }}" || { echo "Missing secret: SSH_PORT"; exit 1; }
-          test -n "${{ secrets.SERVER_USER }}" || { echo "Missing secret: SERVER_USER"; exit 1; }
-          test -n "${{ secrets.TARGET_DIR }}" || { echo "Missing secret: TARGET_DIR"; exit 1; }
+          test -n "${{ secrets.VPS_DEPLOY_KEY }}" || { echo "Missing VPS_DEPLOY_KEY"; exit 1; }
+          test -n "${{ secrets.SERVER_HOST }}" || { echo "Missing SERVER_HOST"; exit 1; }
+          test -n "${{ secrets.SSH_PORT }}" || { echo "Missing SSH_PORT"; exit 1; }
+          test -n "${{ secrets.SERVER_USER }}" || { echo "Missing SERVER_USER"; exit 1; }
+          test -n "${{ secrets.TARGET_DIR }}" || { echo "Missing TARGET_DIR"; exit 1; }
 
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
@@ -37,6 +41,7 @@ jobs:
           ssh-keyscan -p "${{ secrets.SSH_PORT }}" -H "${{ secrets.SERVER_HOST }}" >> ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
 
+      # 5. Ensure target directory exists
       - name: Ensure target directory exists
         run: |
           ssh -i ~/.ssh/id_rsa \
@@ -45,6 +50,7 @@ jobs:
             "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
             "mkdir -p '${{ secrets.TARGET_DIR }}'"
 
+      # 6. Deploy files
       - name: Deploy files to VPS
         run: |
           rsync -az --delete \
@@ -55,18 +61,25 @@ jobs:
             -e "ssh -i ~/.ssh/id_rsa -p ${{ secrets.SSH_PORT }} -o StrictHostKeyChecking=yes" \
             ./ "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}:${{ secrets.TARGET_DIR }}/"
 
-      - name: Create .env and restart PM2
+      # 7. Setup ENV + Install + Restart PM2
+      - name: Setup ENV and Restart Backend
         run: |
           ssh -i ~/.ssh/id_rsa \
             -p "${{ secrets.SSH_PORT }}" \
             -o StrictHostKeyChecking=yes \
-            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" \
-            "cd '${{ secrets.TARGET_DIR }}' && \
-             echo 'MONGO_URI=${{ secrets.MONGO_URI }}' > .env && \
-             echo 'JWT_SECRET=${{ secrets.JWT_SECRET }}' >> .env && \
-             echo 'PORT=5001' >> .env && \
-             echo 'NODE_ENV=production' >> .env && \
-             npm ci --omit=dev && \
-             pm2 delete prime.server || true && \
-             pm2 start ecosystem.config.cjs && \
-             pm2 save"
+            "${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }}" << 'EOF'
+
+            cd '${{ secrets.TARGET_DIR }}'
+
+            echo "MONGO_URI=${{ secrets.MONGO_URI }}" > .env
+            echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+            echo "PORT=5001" >> .env
+            echo "NODE_ENV=production" >> .env
+
+            npm ci --omit=dev
+
+            pm2 delete prime.server || true
+            pm2 start ecosystem.config.cjs
+            pm2 save
+
+            EOF
