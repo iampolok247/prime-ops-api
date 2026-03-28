@@ -28,6 +28,8 @@ import tadaRoutes from "./routes/tada.js";
 import notificationRoutes from "./routes/notifications.js";
 import bankRoutes from "./routes/bank.js";
 import activitiesRoutes from "./routes/activities.js";
+import previousIncomeRoutes from "./routes/previousIncome.js";
+import requisitionsRoutes from "./routes/requisitions.js";
 
 dotenv.config();
 
@@ -107,6 +109,8 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/recruitment", recruitmentRoutes);
 app.use("/api/bank", bankRoutes);
 app.use("/api/activities", activitiesRoutes);
+app.use("/api/previous-income", previousIncomeRoutes);
+app.use("/api/requisitions", requisitionsRoutes);
 
 // ---------- 404 Handler ----------
 app.use((req, res) => {
