@@ -1,12 +1,12 @@
 // routes/manualDues.js
 import express from 'express';
 import ManualDue from '../models/ManualDue.js';
-import auth from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = express.Router();
 
 // GET /api/manual-dues/summary - Dashboard summary
-router.get('/summary', auth, async (req, res) => {
+router.get('/summary', requireAuth, async (req, res) => {
   try {
     const dues = await ManualDue.find();
     
@@ -28,7 +28,7 @@ router.get('/summary', auth, async (req, res) => {
 });
 
 // GET /api/manual-dues/pending-approvals - Get all pending payment approvals (for Accountant)
-router.get('/pending-approvals', auth, async (req, res) => {
+router.get('/pending-approvals', requireAuth, async (req, res) => {
   try {
     const dues = await ManualDue.find({ 'payments.status': 'Pending' })
       .populate('createdBy', 'name')
@@ -62,7 +62,7 @@ router.get('/pending-approvals', auth, async (req, res) => {
 });
 
 // GET /api/manual-dues - List all manual dues
-router.get('/', auth, async (req, res) => {
+router.get('/', requireAuth, async (req, res) => {
   try {
     const { status } = req.query;
     const filter = {};
@@ -81,7 +81,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // GET /api/manual-dues/:id - Get single due
-router.get('/:id', auth, async (req, res) => {
+router.get('/:id', requireAuth, async (req, res) => {
   try {
     const due = await ManualDue.findById(req.params.id)
       .populate('createdBy', 'name')
@@ -96,7 +96,7 @@ router.get('/:id', auth, async (req, res) => {
 });
 
 // POST /api/manual-dues - Create new manual due entry (Coordinator)
-router.post('/', auth, async (req, res) => {
+router.post('/', requireAuth, async (req, res) => {
   try {
     const { studentName, studentPhone, studentEmail, leadId, courseName, batchName, totalAmount, description, dueDate } = req.body;
     
@@ -121,7 +121,7 @@ router.post('/', auth, async (req, res) => {
 });
 
 // POST /api/manual-dues/:id/collect - Collect payment (Coordinator) - needs approval
-router.post('/:id/collect', auth, async (req, res) => {
+router.post('/:id/collect', requireAuth, async (req, res) => {
   try {
     const { amount, method, note } = req.body;
     const due = await ManualDue.findById(req.params.id);
@@ -156,7 +156,7 @@ router.post('/:id/collect', auth, async (req, res) => {
 });
 
 // PATCH /api/manual-dues/:id/payment/:paymentIndex/approve - Approve payment (Accountant)
-router.patch('/:id/payment/:paymentIndex/approve', auth, async (req, res) => {
+router.patch('/:id/payment/:paymentIndex/approve', requireAuth, async (req, res) => {
   try {
     const due = await ManualDue.findById(req.params.id);
     if (!due) return res.status(404).json({ error: 'Due not found' });
@@ -184,7 +184,7 @@ router.patch('/:id/payment/:paymentIndex/approve', auth, async (req, res) => {
 });
 
 // PATCH /api/manual-dues/:id/payment/:paymentIndex/reject - Reject payment (Accountant)
-router.patch('/:id/payment/:paymentIndex/reject', auth, async (req, res) => {
+router.patch('/:id/payment/:paymentIndex/reject', requireAuth, async (req, res) => {
   try {
     const { rejectionNote } = req.body;
     const due = await ManualDue.findById(req.params.id);
@@ -214,7 +214,7 @@ router.patch('/:id/payment/:paymentIndex/reject', auth, async (req, res) => {
 });
 
 // PUT /api/manual-dues/:id - Update due entry
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', requireAuth, async (req, res) => {
   try {
     const updates = req.body;
     const due = await ManualDue.findByIdAndUpdate(req.params.id, updates, { new: true })
@@ -230,7 +230,7 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // DELETE /api/manual-dues/:id - Delete due (only if no approved payments)
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const due = await ManualDue.findById(req.params.id);
     if (!due) return res.status(404).json({ error: 'Due not found' });
