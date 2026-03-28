@@ -155,6 +155,75 @@ router.delete('/:id', requireAuth, async (req, res) => {
   }
 });
 
+// Get approved requisitions for Accountant (pending payment)
+router.get('/approved', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
+  try {
+    const requisitions = await Requisition.find({ status: 'Approved' })
+      .populate('requestedBy', 'name email role designation')
+      .populate('verifiedBy', 'name')
+      .populate('approvedBy', 'name')
+      .sort({ approvedAt: -1 });
+    
+    res.json({ requisitions });
+  } catch (err) {
+    console.error('Error fetching approved requisitions:', err);
+    res.status(500).json({ message: 'Failed to fetch approved requisitions' });
+  }
+});
+
+// Get paid requisitions history
+router.get('/paid', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
+  try {
+    const requisitions = await Requisition.find({ status: 'Paid' })
+      .populate('requestedBy', 'name email role designation')
+      .populate('approvedBy', 'name')
+      .populate('paidBy', 'name')
+      .sort({ paidAt: -1 });
+    
+    res.json({ requisitions });
+  } catch (err) {
+    console.error('Error fetching paid requisitions:', err);
+    res.status(500).json({ message: 'Failed to fetch paid requisitions' });
+  }
+});
+
+// Mark requisition as Paid (Accountant only)
+router.patch('/:id/pay', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
+  try {
+    const { paidAmount, paymentNote } = req.body;
+    
+    const requisition = await Requisition.findById(req.params.id);
+    
+    if (!requisition) {
+      return res.status(404).json({ message: 'Requisition not found' });
+    }
+    
+    if (requisition.status !== 'Approved') {
+      return res.status(400).json({ message: 'Only approved requisitions can be marked as paid' });
+    }
+    
+    const updated = await Requisition.findByIdAndUpdate(
+      req.params.id,
+      {
+        status: 'Paid',
+        paidBy: req.user._id,
+        paidAt: new Date(),
+        paidAmount: paidAmount || requisition.totalAmount,
+        paymentNote: paymentNote || ''
+      },
+      { new: true }
+    )
+      .populate('requestedBy', 'name email role designation')
+      .populate('approvedBy', 'name')
+      .populate('paidBy', 'name');
+    
+    res.json(updated);
+  } catch (err) {
+    console.error('Error marking requisition as paid:', err);
+    res.status(500).json({ message: 'Failed to mark as paid' });
+  }
+});
+
 // Get pending count for admin badge
 router.get('/stats/pending', requireAuth, authorize('Admin', 'SuperAdmin'), async (req, res) => {
   try {
@@ -162,6 +231,17 @@ router.get('/stats/pending', requireAuth, authorize('Admin', 'SuperAdmin'), asyn
     res.json({ pendingCount });
   } catch (err) {
     console.error('Error fetching pending count:', err);
+    res.status(500).json({ message: 'Failed to fetch stats' });
+  }
+});
+
+// Get approved count for accountant badge
+router.get('/stats/approved', requireAuth, authorize('Accountant', 'Admin', 'SuperAdmin'), async (req, res) => {
+  try {
+    const approvedCount = await Requisition.countDocuments({ status: 'Approved' });
+    res.json({ approvedCount });
+  } catch (err) {
+    console.error('Error fetching approved count:', err);
     res.status(500).json({ message: 'Failed to fetch stats' });
   }
 });

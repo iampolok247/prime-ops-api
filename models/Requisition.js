@@ -39,7 +39,7 @@ const requisitionSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Pending', 'Verified', 'Approved', 'Rejected'],
+    enum: ['Pending', 'Verified', 'Approved', 'Rejected', 'Paid'],
     default: 'Pending'
   },
   verifiedBy: {
@@ -53,6 +53,17 @@ const requisitionSchema = new mongoose.Schema({
   },
   approvedAt: Date,
   rejectionReason: String,
+  // Payment fields (for Accountant)
+  paidBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  paidAt: Date,
+  paidAmount: {
+    type: Number,
+    default: 0
+  },
+  paymentNote: String,
   declaration: {
     type: Boolean,
     default: true
