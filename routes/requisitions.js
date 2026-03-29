@@ -92,12 +92,12 @@ router.post('/', requireAuth, async (req, res) => {
   try {
     const { subject, department, items, totalAmount, amountInWords } = req.body;
     
-    if (!subject || !department || !items || items.length === 0) {
-      return res.status(400).json({ message: 'Subject, department and at least one item are required' });
+    if (!department || !items || items.length === 0) {
+      return res.status(400).json({ message: 'Department and at least one item are required' });
     }
 
     const requisition = await Requisition.create({
-      subject,
+      subject: subject || '',
       requestedBy: req.user._id,
       department,
       items,
