@@ -2,6 +2,7 @@ import express from 'express';
 import Requisition from '../models/Requisition.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
+import { notifyAccountants, notifyAdmins } from '../utils/notifications.js';
 
 const router = express.Router();
 
@@ -108,6 +109,17 @@ router.post('/', requireAuth, async (req, res) => {
 
     const populated = await Requisition.findById(requisition._id)
       .populate('requestedBy', 'name email role designation');
+
+    // Notify Admins about new requisition for approval
+    await notifyAdmins({
+      sender: req.user._id,
+      type: 'REQUISITION_SUBMITTED',
+      title: 'New Requisition - Approval Needed',
+      message: `${req.user.name} has submitted a requisition for ৳${requisition.totalAmount} (${department}). Please review and approve.`,
+      link: '/requisition',
+      relatedModel: 'Requisition',
+      relatedId: requisition._id
+    });
     
     res.status(201).json(populated);
   } catch (err) {
@@ -182,6 +194,19 @@ router.patch('/:id/status', requireAuth, authorize('Admin', 'SuperAdmin'), async
     
     if (!requisition) {
       return res.status(404).json({ message: 'Requisition not found' });
+    }
+
+    // If approved, notify Accountants for payment
+    if (status === 'Approved') {
+      await notifyAccountants({
+        sender: req.user._id,
+        type: 'REQUISITION_SUBMITTED',
+        title: 'Requisition Approved - Payment Needed',
+        message: `Requisition by ${requisition.requestedBy?.name || 'Employee'} for ৳${requisition.totalAmount} has been approved. Please process the payment.`,
+        link: '/accounting/requisition-request',
+        relatedModel: 'Requisition',
+        relatedId: requisition._id
+      });
     }
     
     res.json(requisition);

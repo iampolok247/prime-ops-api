@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/auth.js';
 import Lead from '../models/Lead.js';
 import AdmissionFee from '../models/AdmissionFee.js';
 import { logActivity } from './activities.js';
+import { notifyAccountants } from '../utils/notifications.js';
 
 const router = express.Router();
 
@@ -617,6 +618,17 @@ router.post('/fees', requireAuth, async (req, res) => {
     lead.name,
     `Collected admission fee ৳${amount} from ${lead.name} (${lead.leadId})`
   );
+
+  // Notify accountants about new admission fee
+  await notifyAccountants({
+    sender: req.user.id,
+    type: 'ADMISSION_FEE_SUBMITTED',
+    title: 'New Admission Fee - Approval Needed',
+    message: `${req.user.name} has collected ৳${amount} from ${lead.name} (${lead.leadId}) for ${courseName}. Please review and approve.`,
+    link: '/accounting/fees',
+    relatedModel: 'AdmissionFee',
+    relatedId: row._id
+  });
   
   return res.status(201).json({ fee: populated });
 });

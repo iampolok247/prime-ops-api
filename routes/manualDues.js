@@ -2,6 +2,7 @@
 import express from 'express';
 import ManualDue from '../models/ManualDue.js';
 import { requireAuth } from '../middleware/auth.js';
+import { notifyAccountants } from '../utils/notifications.js';
 
 const router = express.Router();
 
@@ -148,6 +149,17 @@ router.post('/:id/collect', requireAuth, async (req, res) => {
       .populate('createdBy', 'name')
       .populate('payments.collectedBy', 'name')
       .populate('payments.approvedBy', 'name');
+
+    // Notify accountants about new payment needing approval
+    await notifyAccountants({
+      sender: req.user._id,
+      type: 'MANUAL_DUE_PAYMENT',
+      title: 'Manual Due Payment - Approval Needed',
+      message: `${req.user.name} has collected ৳${amount} from ${due.studentName} (Manual Due). Please review and approve.`,
+      link: '/accounting/manual-due-approval',
+      relatedModel: 'ManualDue',
+      relatedId: due._id
+    });
     
     res.json(populated);
   } catch (err) {

@@ -3,6 +3,7 @@ import TADAApplication from '../models/TADAApplication.js';
 import Notification from '../models/Notification.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
+import { notifyAccountants } from '../utils/notifications.js';
 
 const router = express.Router();
 
@@ -122,6 +123,17 @@ router.patch('/:id/approve', requireAuth, authorize(['Admin']), async (req, res)
       .populate('employee', 'name email role')
       .populate('adminReviewedBy', 'name email role')
       .populate('paidBy', 'name email role');
+
+    // Notify Accountants about approved TADA for payment
+    await notifyAccountants({
+      sender: req.user.id,
+      type: 'TADA_APPROVED',
+      title: 'TA/DA Approved - Payment Needed',
+      message: `TA/DA application by ${populated.employee?.name || 'Employee'} for ৳${application.amount} has been approved. Please process the payment.`,
+      link: '/accounting/tada-payments',
+      relatedModel: 'TADAApplication',
+      relatedId: application._id
+    });
 
     return res.json({ application: populated });
   } catch (e) {

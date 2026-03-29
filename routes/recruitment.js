@@ -3,6 +3,7 @@ import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
 import { logActivity } from './activities.js';
+import { notifyAccountants } from '../utils/notifications.js';
 
 import Candidate from '../models/RecruitmentCandidate.js';
 import Employer from '../models/RecruitmentEmployer.js';
@@ -373,6 +374,18 @@ router.post(
       });
       const populated = await RIncome.findById(created._id)
         .populate('submittedBy', 'name email role');
+
+      // Notify accountants about new recruitment income
+      await notifyAccountants({
+        sender: req.user.id,
+        type: 'RECRUITMENT_INCOME_SUBMITTED',
+        title: 'New Recruitment Income - Approval Needed',
+        message: `${req.user.name} has submitted recruitment income of ৳${amount} from ${source}. Please review and approve.`,
+        link: '/recruitment/income',
+        relatedModel: 'RecruitmentIncome',
+        relatedId: created._id
+      });
+
       res.status(201).json(populated);
     } catch (e) {
       res.status(400).json({ message: e.message || 'Failed to add income' });

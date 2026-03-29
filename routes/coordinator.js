@@ -4,6 +4,7 @@ import Lead from '../models/Lead.js';
 import AdmissionFee from '../models/AdmissionFee.js';
 import DueFeesFollowUp from '../models/DueFeesFollowUp.js';
 import DueCollection from '../models/DueCollection.js';
+import { notifyAccountants } from '../utils/notifications.js';
 
 const router = express.Router();
 
@@ -315,6 +316,18 @@ router.post('/collect-due', requireAuth, async (req, res) => {
     const populated = await DueCollection.findById(dueCollection._id)
       .populate('lead', 'leadId name phone email')
       .populate('coordinator', 'name email');
+
+    // Notify accountants about new due collection
+    const leadInfo = await Lead.findById(admissionFee.lead);
+    await notifyAccountants({
+      sender: req.user.id,
+      type: 'DUE_COLLECTION_SUBMITTED',
+      title: 'New Due Collection - Approval Needed',
+      message: `${req.user.name} has collected ৳${additionalPayment} due from ${leadInfo?.name || 'Student'}. Please review and approve.`,
+      link: '/accounting/due-collections',
+      relatedModel: 'DueCollection',
+      relatedId: dueCollection._id
+    });
 
     return res.json({ 
       dueCollection: populated, 

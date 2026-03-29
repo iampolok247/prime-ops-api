@@ -25,9 +25,16 @@ const NotificationSchema = new mongoose.Schema(
         'TADA_APPROVED',
         'TADA_REJECTED',
         'TADA_PAID',
+        'TADA_DETAILS_REQUESTED',
         'TASK_ASSIGNED',
         'TASK_COMPLETED',
-        'MESSAGE_RECEIVED'
+        'MESSAGE_RECEIVED',
+        // Accountant specific notifications
+        'ADMISSION_FEE_SUBMITTED',
+        'DUE_COLLECTION_SUBMITTED',
+        'RECRUITMENT_INCOME_SUBMITTED',
+        'REQUISITION_SUBMITTED',
+        'MANUAL_DUE_PAYMENT'
       ],
       required: true
     },
@@ -44,7 +51,7 @@ const NotificationSchema = new mongoose.Schema(
     },
     relatedModel: {
       type: String,
-      enum: ['LeaveApplication', 'TADAApplication', 'Task', 'Message', null]
+      enum: ['LeaveApplication', 'TADAApplication', 'Task', 'Message', 'AdmissionFee', 'DueCollection', 'RecruitmentIncome', 'Requisition', 'ManualDue', null]
     },
     relatedId: {
       type: mongoose.Schema.Types.ObjectId
