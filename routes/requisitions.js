@@ -112,7 +112,11 @@ router.post('/', requireAuth, async (req, res) => {
     res.status(201).json(populated);
   } catch (err) {
     console.error('Error creating requisition:', err);
-    res.status(500).json({ message: 'Failed to create requisition' });
+    console.error('Error details:', err.message);
+    if (err.errors) {
+      console.error('Validation errors:', JSON.stringify(err.errors, null, 2));
+    }
+    res.status(500).json({ message: 'Failed to create requisition', error: err.message });
   }
 });
 
