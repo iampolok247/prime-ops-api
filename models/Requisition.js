@@ -15,7 +15,7 @@ const requisitionSchema = new mongoose.Schema({
   },
   subject: {
     type: String,
-    required: true,
+    default: '',
     trim: true
   },
   requestedBy: {
