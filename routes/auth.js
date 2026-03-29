@@ -4,6 +4,7 @@ import User from '../models/User.js';
 import { comparePassword, hashPassword } from '../utils/hash.js';
 import { requireAuth } from '../middleware/auth.js';
 import { logActivity } from './activities.js';
+import { recordLogin, recordLogout } from './attendance.js';
 
 const router = express.Router();
 
@@ -73,6 +74,9 @@ router.post('/login', async (req, res) => {
       `User logged in`
     );
     
+    // Record attendance on login
+    await recordLogin(user._id, req);
+    
     // Also send token in response body for cross-origin setups
     return res.json({ user: safe, token });
   } catch (e) {
@@ -131,6 +135,9 @@ router.get('/me', requireAuth, async (req, res) => {
 
 // Logout
 router.post('/logout', requireAuth, async (req, res) => {
+  // Record logout time in attendance
+  await recordLogout(req.user.id);
+  
   // Log logout activity
   await logActivity(
     req.user.id,
