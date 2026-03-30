@@ -71,7 +71,7 @@ router.get('/', requireAuth, async (req, res) => {
     
     // If not Admin/SuperAdmin/Accountant, only show user's own requisitions
     if (!['Admin', 'SuperAdmin', 'Accountant'].includes(req.user.role)) {
-      query.requestedBy = req.user._id;
+  query.requestedBy = req.user._id || req.user.id;
     }
     
     const requisitions = await Requisition.find(query)
@@ -97,12 +97,33 @@ router.post('/', requireAuth, async (req, res) => {
       return res.status(400).json({ message: 'Department and at least one item are required' });
     }
 
+    // Backward-compatible normalization (supports old payload keys like particulars)
+    const normalizedItems = (items || []).map((item = {}) => {
+      const description = String(item.description || item.particulars || '').trim();
+      const quantity = Number(item.quantity ?? 1);
+      const unitPrice = Number(item.unitPrice ?? item.estimatedCost ?? 0);
+      const estimatedCost = Number(item.estimatedCost ?? (quantity * unitPrice));
+      const remarks = String(item.remarks || '').trim();
+
+      return {
+        description,
+        quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+        unitPrice: Number.isFinite(unitPrice) && unitPrice >= 0 ? unitPrice : 0,
+        estimatedCost: Number.isFinite(estimatedCost) && estimatedCost >= 0 ? estimatedCost : 0,
+        remarks
+      };
+    });
+
+    if (normalizedItems.some(i => !i.description)) {
+      return res.status(400).json({ message: 'Each requisition item must have a description' });
+    }
+
     const requisition = await Requisition.create({
       subject: subject || '',
-      requestedBy: req.user._id,
+  requestedBy: req.user._id || req.user.id,
       department,
-      items,
-      totalAmount: Number(totalAmount) || items.reduce((sum, item) => sum + (item.estimatedCost || 0), 0),
+      items: normalizedItems,
+      totalAmount: Number(totalAmount) || normalizedItems.reduce((sum, item) => sum + (item.estimatedCost || 0), 0),
       amountInWords,
       declaration: true
     });
@@ -113,7 +134,7 @@ router.post('/', requireAuth, async (req, res) => {
     // Notify Admins about new requisition for approval (don't let notification failure break the request)
     try {
       await notifyAdmins({
-        sender: req.user._id,
+  sender: req.user._id || req.user.id,
         type: 'REQUISITION_SUBMITTED',
         title: 'New Requisition - Approval Needed',
         message: `${req.user.name} has submitted a requisition for ৳${requisition.totalAmount} (${department}). Please review and approve.`,
@@ -132,7 +153,15 @@ router.post('/', requireAuth, async (req, res) => {
     if (err.errors) {
       console.error('Validation errors:', JSON.stringify(err.errors, null, 2));
     }
-    res.status(500).json({ message: 'Failed to create requisition', error: err.message });
+    if (err?.code === 11000) {
+      return res.status(409).json({
+        message: 'Requisition number conflict, please submit again',
+        error: err.message,
+        code: 'REQUISITION_NO_CONFLICT'
+      });
+    }
+
+    res.status(500).json({ message: 'Failed to create requisition', error: err.message, code: 'REQUISITION_CREATE_FAILED' });
   }
 });
 
@@ -152,8 +181,8 @@ router.get('/:id', requireAuth, async (req, res) => {
     }
     
     // Check if user can view this requisition
-    if (!['Admin', 'SuperAdmin', 'Accountant'].includes(req.user.role) && 
-        requisition.requestedBy._id.toString() !== req.user._id.toString()) {
+  if (!['Admin', 'SuperAdmin', 'Accountant'].includes(req.user.role) && 
+    requisition.requestedBy._id.toString() !== String(req.user._id || req.user.id)) {
       return res.status(403).json({ message: 'Not authorized to view this requisition' });
     }
     
@@ -176,14 +205,14 @@ router.patch('/:id/status', requireAuth, authorize('Admin', 'SuperAdmin'), async
     const updateData = { status };
     
     if (status === 'Verified') {
-      updateData.verifiedBy = req.user._id;
+  updateData.verifiedBy = req.user._id || req.user.id;
       updateData.verifiedAt = new Date();
     } else if (status === 'Approved') {
-      updateData.approvedBy = req.user._id;
+  updateData.approvedBy = req.user._id || req.user.id;
       updateData.approvedAt = new Date();
     } else if (status === 'Rejected') {
       updateData.rejectionReason = rejectionReason || '';
-      updateData.approvedBy = req.user._id;
+  updateData.approvedBy = req.user._id || req.user.id;
       updateData.approvedAt = new Date();
     }
     
@@ -203,7 +232,7 @@ router.patch('/:id/status', requireAuth, authorize('Admin', 'SuperAdmin'), async
     // If approved, notify Accountants for payment
     if (status === 'Approved') {
       await notifyAccountants({
-        sender: req.user._id,
+  sender: req.user._id || req.user.id,
         type: 'REQUISITION_SUBMITTED',
         title: 'Requisition Approved - Payment Needed',
         message: `Requisition by ${requisition.requestedBy?.name || 'Employee'} for ৳${requisition.totalAmount} has been approved. Please process the payment.`,
@@ -239,7 +268,7 @@ router.patch('/:id/pay', requireAuth, authorize('Accountant', 'Admin', 'SuperAdm
       req.params.id,
       {
         status: 'Paid',
-        paidBy: req.user._id,
+  paidBy: req.user._id || req.user.id,
         paidAt: new Date(),
         paidAmount: paidAmount || requisition.totalAmount,
         paymentNote: paymentNote || ''
@@ -267,7 +296,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
     }
     
     // Check permissions
-    const isOwner = requisition.requestedBy.toString() === req.user._id.toString();
+  const isOwner = requisition.requestedBy.toString() === String(req.user._id || req.user.id);
     const isAdmin = ['Admin', 'SuperAdmin'].includes(req.user.role);
     
     if (!isOwner && !isAdmin) {

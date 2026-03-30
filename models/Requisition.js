@@ -79,22 +79,25 @@ requisitionSchema.pre('save', async function(next) {
     const year = new Date().getFullYear();
     const prefix = `REQ-${year}-`;
 
-    // Find latest requisition number for the current year and increment safely.
-    // Using countDocuments can create duplicates after deletions.
-    const latest = await RequisitionModel
-      .findOne({ requisitionNo: { $regex: `^${prefix}` } })
-      .sort({ createdAt: -1 })
-      .select('requisitionNo')
-      .lean();
+    // Start from count, then probe for the next available number.
+    // This avoids collisions after deletions and handles legacy malformed values.
+    const baseCount = await RequisitionModel.countDocuments({
+      requisitionNo: { $regex: `^${prefix}` }
+    });
 
-    let nextSeq = 1;
-    if (latest?.requisitionNo) {
-      const parts = latest.requisitionNo.split('-');
-      const last = Number(parts[parts.length - 1]);
-      if (!Number.isNaN(last)) nextSeq = last + 1;
+    let seq = baseCount + 1;
+    let candidate = `${prefix}${String(seq).padStart(4, '0')}`;
+
+    // Probe forward until we find an unused requisition number.
+    // (bounded loop to avoid infinite retries)
+    for (let i = 0; i < 5000; i += 1) {
+      const exists = await RequisitionModel.exists({ requisitionNo: candidate });
+      if (!exists) break;
+      seq += 1;
+      candidate = `${prefix}${String(seq).padStart(4, '0')}`;
     }
 
-    this.requisitionNo = `${prefix}${String(nextSeq).padStart(4, '0')}`;
+    this.requisitionNo = candidate;
   }
   next();
 });
