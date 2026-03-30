@@ -75,9 +75,26 @@ const requisitionSchema = new mongoose.Schema({
 // Auto-generate requisition number before save
 requisitionSchema.pre('save', async function(next) {
   if (!this.requisitionNo) {
-    const count = await mongoose.model('Requisition').countDocuments();
+    const RequisitionModel = mongoose.model('Requisition');
     const year = new Date().getFullYear();
-    this.requisitionNo = `REQ-${year}-${String(count + 1).padStart(4, '0')}`;
+    const prefix = `REQ-${year}-`;
+
+    // Find latest requisition number for the current year and increment safely.
+    // Using countDocuments can create duplicates after deletions.
+    const latest = await RequisitionModel
+      .findOne({ requisitionNo: { $regex: `^${prefix}` } })
+      .sort({ createdAt: -1 })
+      .select('requisitionNo')
+      .lean();
+
+    let nextSeq = 1;
+    if (latest?.requisitionNo) {
+      const parts = latest.requisitionNo.split('-');
+      const last = Number(parts[parts.length - 1]);
+      if (!Number.isNaN(last)) nextSeq = last + 1;
+    }
+
+    this.requisitionNo = `${prefix}${String(nextSeq).padStart(4, '0')}`;
   }
   next();
 });
