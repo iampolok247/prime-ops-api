@@ -110,16 +110,20 @@ router.post('/', requireAuth, async (req, res) => {
     const populated = await Requisition.findById(requisition._id)
       .populate('requestedBy', 'name email role designation');
 
-    // Notify Admins about new requisition for approval
-    await notifyAdmins({
-      sender: req.user._id,
-      type: 'REQUISITION_SUBMITTED',
-      title: 'New Requisition - Approval Needed',
-      message: `${req.user.name} has submitted a requisition for ৳${requisition.totalAmount} (${department}). Please review and approve.`,
-      link: '/requisition',
-      relatedModel: 'Requisition',
-      relatedId: requisition._id
-    });
+    // Notify Admins about new requisition for approval (don't let notification failure break the request)
+    try {
+      await notifyAdmins({
+        sender: req.user._id,
+        type: 'REQUISITION_SUBMITTED',
+        title: 'New Requisition - Approval Needed',
+        message: `${req.user.name} has submitted a requisition for ৳${requisition.totalAmount} (${department}). Please review and approve.`,
+        link: '/requisition',
+        relatedModel: 'Requisition',
+        relatedId: requisition._id
+      });
+    } catch (notifErr) {
+      console.error('Notification error (non-blocking):', notifErr.message);
+    }
     
     res.status(201).json(populated);
   } catch (err) {
