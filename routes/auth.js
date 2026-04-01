@@ -22,15 +22,9 @@ router.post('/login', async (req, res) => {
     let roleToUse = user.role;
     const availableRoles = user.roles && user.roles.length > 0 ? user.roles : [user.role];
     
-    // If user has multiple roles and no role selected, return available roles for selection
-    if (availableRoles.length > 1 && !selectedRole) {
-      return res.json({ 
-        requiresRoleSelection: true,
-        availableRoles,
-        email: user.email,
-        name: user.name
-      });
-    }
+    // Backward-compatible behavior:
+    // if no role is selected, continue login with primary role.
+    // (older clients expect { user, token } and don't handle role-selection response)
     
     // If role is selected, validate and use it
     if (selectedRole) {
@@ -78,7 +72,7 @@ router.post('/login', async (req, res) => {
     await recordLogin(user._id, req);
     
     // Also send token in response body for cross-origin setups
-    return res.json({ user: safe, token });
+    return res.json({ user: safe, token, availableRoles });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
