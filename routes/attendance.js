@@ -143,20 +143,27 @@ router.get('/all', requireAuth, authorize(['Accountant', 'Admin', 'SuperAdmin'])
 // GET /api/attendance/report - Get attendance report (Accountant/Admin only)
 router.get('/report', requireAuth, authorize(['Accountant', 'Admin', 'SuperAdmin']), async (req, res) => {
   try {
-    const { from, to } = req.query;
+    const { from, to, userId } = req.query;
     
     if (!from || !to) {
       return res.status(400).json({ message: 'From and to dates are required' });
     }
     
-    // Get all active users
-    const users = await User.find({ status: { $ne: 'Inactive' } })
+    // Get all active users (or a specific user if filtered)
+    const userQuery = { status: { $ne: 'Inactive' } };
+    if (userId) userQuery._id = userId;
+
+    const users = await User.find(userQuery)
       .select('name email role designation');
     
     // Get attendance records for the period
-    const attendances = await Attendance.find({
+    const attendanceQuery = {
       date: { $gte: from, $lte: to }
-    }).populate('user', 'name email role');
+    };
+    if (userId) attendanceQuery.user = userId;
+
+    const attendances = await Attendance.find(attendanceQuery)
+      .populate('user', 'name email role');
     
     // Group by user
     const userAttendanceMap = {};
