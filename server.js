@@ -33,6 +33,9 @@ import requisitionsRoutes from "./routes/requisitions.js"; // Requisition system
 import recruitmentDuesRoutes from "./routes/recruitmentDues.js"; // Recruitment due collection
 import manualDuesRoutes from "./routes/manualDues.js"; // Manual due entry for coordinator
 import attendanceRoutes from "./routes/attendance.js"; // OPS Attendance tracking
+import metaLeadsRoutes from "./routes/metaLeads.js";   // Meta Lead Management (new CRM module)
+import cron from "node-cron";
+import { runRoundRobinAssignment } from "./jobs/roundRobin.js";
 
 dotenv.config();
 
@@ -117,6 +120,7 @@ app.use("/api/requisitions", requisitionsRoutes);
 app.use("/api/recruitment-dues", recruitmentDuesRoutes);
 app.use("/api/manual-dues", manualDuesRoutes);
 app.use("/api/attendance", attendanceRoutes);
+app.use("/api/meta-leads", metaLeadsRoutes); // Meta Lead CRM module
 
 // ---------- 404 Handler ----------
 app.use((req, res) => {
@@ -146,6 +150,12 @@ connectDB(process.env.MONGO_URI)
       console.log(`🚀 API running on http://0.0.0.0:${PORT}`);
       console.log(`🚀 Accessible at http://31.97.228.226:${PORT}`);
     });
+
+    // Daily 1 PM BST (= 07:00 UTC) round-robin auto-assignment for Meta Leads
+    cron.schedule('0 7 * * *', () => {
+      console.log('[Cron] Triggering 1 PM round-robin assignment…');
+      runRoundRobinAssignment().catch(e => console.error('[Cron] Round-robin failed:', e.message));
+    }, { timezone: 'UTC' });
   })
   .catch((err) => {
     console.error("❌ DB connection failed:", err.message);
