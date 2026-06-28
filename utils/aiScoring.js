@@ -31,13 +31,17 @@ function extractFormAnswers(rawQuestionData) {
           answer:   Array.isArray(values) ? values[0] : values
         }));
       }
-      // Flat object form after parsing: {"question_key": "answer", ...}
+      // Flat object form after parsing: {"question_key": "answer" or ["answer"], ...}
       if (fd && typeof fd === 'object') {
         const skip = new Set(['full_name','phone_number','email','id','form_id','ad_id',
           'ad_name','campaign_id','campaign_name','created_time','platform','is_organic']);
         return Object.entries(fd)
-          .filter(([k, v]) => !skip.has(k) && v && typeof v === 'string')
-          .map(([k, v]) => ({ question: k, answer: v }));
+          .filter(([k]) => !skip.has(k))
+          .map(([k, v]) => ({
+            question: k,
+            answer: Array.isArray(v) ? v[0] : String(v)  // answers often come as arrays
+          }))
+          .filter(({ answer }) => answer && answer !== 'undefined');
       }
     } catch {}
   }
@@ -77,34 +81,42 @@ export async function scoreLeadWithAI(lead) {
 
   const prompt = `You are a lead qualification expert for Prime Academy, an educational institution in Bangladesh.
 
-A prospective student submitted a Meta (Facebook/Instagram) ad lead form. Your job is to score this lead based ONLY on their form answers — not contact details.
+Score this lead STRICTLY based on their actual form answers. Be honest — most paid ad leads are not ready to enroll immediately.
 
-Key signals to look for:
-- Readiness to enroll: answers like "হ্যাঁ, প্রস্তুত" / "Yes, ready" / within 7 days → HIGH score
-- Wants more info: "আরও জানতে চাই" / "want to know more" / "partially" → MEDIUM score
-- Uncertain / not ready: "এখনো নিশ্চিত নই" / "not sure" / vague answers → LOW score
-- Career clarity: specific goal (e.g. freelancing, job, IELTS target score) → boosts score
-- Course interest: knows exactly which course they want → boosts score
+SCORING RULES (apply strictly):
 
-Lead information:
-- Course interested in: ${lead.interestedCourse || 'not specified'}
-- Platform: ${lead.platform || 'unknown'}
-- Is organic: ${lead.isOrganic ? 'yes (higher intent)' : 'no (paid ad)'}
+COLD (0–39): Any of these answers → score max 35
+- "এখনো নিশ্চিত নই" / "not sure yet" / "নিশ্চিত না"
+- "অন্যান্য" / "Other" as reason (vague, no real intent)
+- "না" / "No" to enrollment readiness
+- No clear goal or reason given
 
-Form questions and answers (may be in Bengali or English):
+WARM (40–69): Interested but hesitant
+- Wants more information before deciding
+- Has a goal but unsure about timing
+- Positive but non-committal answers
+
+HOT (70–100): Clear intent, ready to act
+- "হ্যাঁ, আগ্রহী" / "Yes, interested" / "প্রস্তুত"
+- Ready to enroll within 7 days
+- Clear specific goal (freelancing income, job, IELTS score)
+- Knows exactly what they want
+
+Lead context:
+- Course: ${lead.interestedCourse || 'not specified'}
+- Source: ${lead.isOrganic ? 'Organic (higher intent)' : 'Paid ad'}
+
+Form Q&A (Bengali or English):
 ${qaBlock}
 
-Respond ONLY with valid JSON — no markdown, no extra text:
+Respond ONLY with valid JSON:
 {
-  "score": 72,
-  "temperature": "Warm",
-  "reasoning": "One sentence explaining why."
+  "score": 25,
+  "temperature": "Cold",
+  "reasoning": "One sentence, max 15 words, in English."
 }
 
-Rules:
-- score: integer 0–100
-- temperature: exactly "Hot" (score 70+), "Warm" (score 50–69), or "Cold" (score 0–49)
-- reasoning: max 15 words, in English`;
+IMPORTANT: If answers show uncertainty ("এখনো নিশ্চিত নই", "অন্যান্য"), score MUST be below 40.`;
 
   try {
     const res = await fetch(OPENAI_URL, {
