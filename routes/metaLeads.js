@@ -202,7 +202,7 @@ router.post('/webhook', async (req, res) => {
       isOrganic,
       rawQuestionData,
       customFields,
-      validationStatus: 'pending',
+      validationStatus: 'validated',
       status:           'Pending'
     });
 
