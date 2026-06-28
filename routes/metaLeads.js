@@ -103,8 +103,13 @@ router.post('/webhook', async (req, res) => {
     // We flatten it into a plain object so the rest of the code works identically
     // for both raw Make.com payloads and manual test POSTs.
     const flat = {};
-    if (Array.isArray(body.field_data)) {
-      body.field_data.forEach(({ name: fieldName, values }) => {
+    let fieldDataArr = body.field_data;
+    // Make.com sometimes sends field_data as a JSON string instead of a real array
+    if (typeof fieldDataArr === 'string') {
+      try { fieldDataArr = JSON.parse(fieldDataArr); } catch { fieldDataArr = []; }
+    }
+    if (Array.isArray(fieldDataArr)) {
+      fieldDataArr.forEach(({ name: fieldName, values }) => {
         if (fieldName && Array.isArray(values) && values.length > 0) {
           flat[fieldName] = values[0]; // Meta always wraps values in an array
         }
@@ -123,12 +128,33 @@ router.post('/webhook', async (req, res) => {
     const metaAdName       = merged.ad_name || merged.adName || '';
     const metaCampaignName = merged.campaign_name || merged.campaignName || '';
     const metaCampaignId   = merged.campaign_id || merged.campaignId || '';
-    const platform         = merged.platform || '';
+    const PLATFORM_MAP = { fb: 'Facebook', ig: 'Instagram', wa: 'WhatsApp', messenger: 'Messenger' };
+    const rawPlatform      = merged.platform || '';
+    const platform         = PLATFORM_MAP[rawPlatform.toLowerCase()] || rawPlatform || '';
     const isOrganic        = merged.is_organic === true || merged.isOrganic === true;
 
     if (!name && !phone && !email) {
       return res.status(400).json({ code: 'EMPTY_LEAD', message: 'Lead must have at least name, phone, or email' });
     }
+
+    // ── CAMPAIGN FILTER (currently disabled — uncomment the block below to activate) ──────────────
+    // PURPOSE: Only capture leads from campaigns whose name contains the word "course"
+    //          (case-insensitive: matches "Course", "COURSE", "course", etc.).
+    //          Any lead coming from a campaign that does NOT contain "course" in its name
+    //          will be silently skipped (returns 200 SKIPPED, nothing saved to DB).
+    //
+    // EXAMPLES:
+    //   ✅ Captured  → "IELTS Course 2026", "Python COURSE Leads", "course registration"
+    //   ⛔ Skipped   → "Awareness Campaign Q3", "Hiring 2026", "Brand Promotion"
+    //   ✅ Captured  → leads with no campaign name (safe fallback, not filtered out)
+    //
+    // HOW TO ACTIVATE: Remove the /* and */ comment wrappers below.
+    // ─────────────────────────────────────────────────────────────────────────────────────────────
+    /*
+    if (metaCampaignName && !/course/i.test(metaCampaignName)) {
+      return res.status(200).json({ code: 'SKIPPED', message: 'Lead skipped: campaign is not course-related' });
+    }
+    */
 
     // Dedup by Meta lead ID (fastest check)
     if (metaLeadId) {
