@@ -571,6 +571,24 @@ router.patch('/:id/status', requireAuth, authorize(VIEW_ROLES), async (req, res)
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// POST /api/meta-leads/rescore
+// Re-score all leads that have no aiScore yet. DM / Admin only.
+// ═══════════════════════════════════════════════════════════════════════════════
+router.post('/rescore', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
+  try {
+    const unscored = await MetaLead.find({ aiScore: null, isDeleted: false }).lean();
+    if (unscored.length === 0) {
+      return res.json({ ok: true, queued: 0, message: 'All leads already scored' });
+    }
+    // Fire async scoring for each — non-blocking, runs in background
+    unscored.forEach(lead => scoreLeadAsync(MetaLead, lead._id, lead));
+    return res.json({ ok: true, queued: unscored.length, message: `Scoring ${unscored.length} lead(s) in background` });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // POST /api/meta-leads/round-robin/trigger
 // Admin / SuperAdmin manually triggers round-robin (useful for testing).
 // ═══════════════════════════════════════════════════════════════════════════════
