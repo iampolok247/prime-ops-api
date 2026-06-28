@@ -61,7 +61,7 @@ function extractFormAnswers(rawQuestionData) {
  * or null on failure.
  *
  * Temperature logic (defined by team):
- *   Hot  = 80+     → ready to enroll, clear intent, willing within 7 days
+ *   Hot  = 70+     → ready to enroll, clear intent, willing within 7 days
  *   Warm = 50–69   → interested but needs follow-up, wants more info
  *   Cold = 0–49    → uncertain, not ready, just browsing
  */
@@ -85,7 +85,7 @@ Output: ONLY valid JSON. No markdown. No explanation outside JSON.
 
 
 SCORING RANGES:
-80–100 = Hot Lead (likely to enroll within 30 days)
+70–100 = Hot Lead (likely to enroll within 30 days)
 40–69 = Warm Lead (interested, needs nurture)
 0–39 = Cold Lead (low intent or unfit)
 
@@ -234,7 +234,7 @@ OUTPUT — ONLY THIS JSON:
     const score = Math.min(100, Math.max(0, Math.round(rawScore)));
 
     // Enforce thresholds server-side regardless of what AI returned
-    const temperature = score >= 80 ? 'Hot' : score >= 40 ? 'Warm' : 'Cold';
+    const temperature = score >= 70 ? 'Hot' : score >= 40 ? 'Warm' : 'Cold';
     const reasoning   = parsed.reason || parsed.reasoning || '';
 
     return { score, temperature, reasoning };
