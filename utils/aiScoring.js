@@ -61,7 +61,7 @@ function extractFormAnswers(rawQuestionData) {
  * or null on failure.
  *
  * Temperature logic (defined by team):
- *   Hot  = 70+     → ready to enroll, clear intent, willing within 7 days
+ *   Hot  = 80+     → ready to enroll, clear intent, willing within 7 days
  *   Warm = 50–69   → interested but needs follow-up, wants more info
  *   Cold = 0–49    → uncertain, not ready, just browsing
  */
