@@ -100,6 +100,44 @@ async function isDuplicate(phone, email, interestedCourse) {
   return !!dup;
 }
 
+// ── Instant lead routing ──────────────────────────────────────────────────────
+// Finds on-duty counsellors and picks the one with fewest leads assigned today.
+// Returns the chosen counsellor or null if none are on duty.
+async function pickOnDutyCounsellor() {
+  const onDuty = await User.find({
+    role:                     'Admission',
+    isActive:                 true,
+    availableForInstantLeads: true
+  }).lean();
+
+  if (onDuty.length === 0) return null;
+  if (onDuty.length === 1) return onDuty[0];
+
+  // Count leads assigned TODAY per counsellor — give next lead to whoever has fewest
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
+  const counts = await MetaLead.aggregate([
+    { $match: {
+        assignedTo: { $in: onDuty.map(u => u._id) },
+        assignedAt: { $gte: todayStart },
+        isDeleted:  false
+    }},
+    { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
+  ]);
+
+  const countMap = {};
+  counts.forEach(c => { countMap[String(c._id)] = c.count; });
+
+  // Sort by lead count ascending, then by displayOrder for tie-breaking
+  onDuty.sort((a, b) => {
+    const diff = (countMap[String(a._id)] || 0) - (countMap[String(b._id)] || 0);
+    return diff !== 0 ? diff : (a.displayOrder || 0) - (b.displayOrder || 0);
+  });
+
+  return onDuty[0];
+}
+
 // ── Webhook auth ──────────────────────────────────────────────────────────────
 function verifyWebhookSecret(req) {
   const secret = process.env.WEBHOOK_SECRET;
@@ -265,10 +303,35 @@ router.post('/webhook', async (req, res) => {
     // Fire AI scoring asynchronously — non-blocking
     scoreLeadAsync(MetaLead, lead._id, lead);
 
-    // Push instant update to all open browser tabs
-    pushLeadEvent({ type: 'NEW_LEAD', leadId: lead.leadId, name: lead.name });
+    // ── Instant routing — assign to on-duty counsellor if available ───────────
+    const counsellor = await pickOnDutyCounsellor();
+    if (counsellor) {
+      await MetaLead.findByIdAndUpdate(lead._id, {
+        assignedTo:   counsellor._id,
+        assignedAt:   new Date(),
+        autoAssigned: true,
+        status:       'Assigned'
+      });
+      // Push targeted event to that counsellor + general NEW_LEAD to admin tabs
+      pushLeadEvent({
+        type:          'NEW_LEAD',
+        leadId:        lead.leadId,
+        name:          lead.name,
+        assignedTo:    String(counsellor._id),
+        counsellor:    counsellor.name,
+        autoAssigned:  true
+      });
+    } else {
+      // No one on duty — push to admin tabs as unassigned
+      pushLeadEvent({ type: 'NEW_LEAD', leadId: lead.leadId, name: lead.name, autoAssigned: false });
+    }
 
-    return res.status(201).json({ ok: true, leadId: lead.leadId });
+    return res.status(201).json({
+      ok:          true,
+      leadId:      lead.leadId,
+      autoAssigned: !!counsellor,
+      assignedTo:   counsellor ? counsellor.name : null
+    });
   } catch (e) {
     console.error('[Webhook] Error:', e.message);
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
