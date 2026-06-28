@@ -633,9 +633,19 @@ router.post('/rescore', requireAuth, authorize(MANAGE_ROLES), async (req, res) =
     if (unscored.length === 0) {
       return res.json({ ok: true, queued: 0, message: 'All leads already scored' });
     }
-    // Fire async scoring for each — non-blocking, runs in background
     unscored.forEach(lead => scoreLeadAsync(MetaLead, lead._id, lead));
     return res.json({ ok: true, queued: unscored.length, message: `Scoring ${unscored.length} lead(s) in background` });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// ── TEMPORARY: Force re-score ALL leads regardless of existing score ──────────
+router.post('/rescore-all', requireAuth, authorize(ADMIN_ROLES), async (req, res) => {
+  try {
+    const all = await MetaLead.find({ isDeleted: false }).lean();
+    all.forEach(lead => scoreLeadAsync(MetaLead, lead._id, lead));
+    return res.json({ ok: true, queued: all.length, message: `Force re-scoring ${all.length} lead(s)` });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
