@@ -12,7 +12,7 @@ const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 function extractFormAnswers(rawQuestionData) {
   if (!rawQuestionData) return [];
 
-  // Meta format: field_data: [{name: "question_key", values: ["answer"]}]
+  // 1. Meta array format: field_data: [{name: "q", values: ["a"]}, ...]
   if (Array.isArray(rawQuestionData.field_data)) {
     return rawQuestionData.field_data.map(({ name, values }) => ({
       question: name,
@@ -20,11 +20,34 @@ function extractFormAnswers(rawQuestionData) {
     }));
   }
 
-  // Flat format: {"full_name": "John", "phone_number": "017...", ...}
+  // 2. field_data sent as a JSON string — parse it first
+  if (typeof rawQuestionData.field_data === 'string') {
+    try {
+      const fd = JSON.parse(rawQuestionData.field_data);
+      // Array form after parsing
+      if (Array.isArray(fd)) {
+        return fd.map(({ name, values }) => ({
+          question: name,
+          answer:   Array.isArray(values) ? values[0] : values
+        }));
+      }
+      // Flat object form after parsing: {"question_key": "answer", ...}
+      if (fd && typeof fd === 'object') {
+        const skip = new Set(['full_name','phone_number','email','id','form_id','ad_id',
+          'ad_name','campaign_id','campaign_name','created_time','platform','is_organic']);
+        return Object.entries(fd)
+          .filter(([k, v]) => !skip.has(k) && v && typeof v === 'string')
+          .map(([k, v]) => ({ question: k, answer: v }));
+      }
+    } catch {}
+  }
+
+  // 3. Flat top-level format: {"full_name": "John", "phone_number": "017...", ...}
   const skip = new Set(['full_name','phone_number','email','id','form_id','ad_id',
-    'ad_name','campaign_id','campaign_name','created_time','platform','is_organic']);
+    'ad_name','campaign_id','campaign_name','created_time','platform','is_organic',
+    'field_data','interestedCourse']);
   return Object.entries(rawQuestionData)
-    .filter(([k]) => !skip.has(k))
+    .filter(([k, v]) => !skip.has(k) && v && typeof v !== 'object')
     .map(([k, v]) => ({ question: k, answer: String(v) }));
 }
 
