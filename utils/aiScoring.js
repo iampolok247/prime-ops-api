@@ -1,7 +1,8 @@
 // OpenAI lead scoring — reads raw Meta form answers, returns score + Hot/Warm/Cold.
 // No manual scoring. DM only validates (approve/reject). AI does all qualification.
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const OPENAI_URL     = 'https://api.openai.com/v1/chat/completions';
+// NOTE: Read OPENAI_API_KEY inside functions, not at module level —
+// ESM imports are hoisted so this module loads before dotenv.config() runs in server.js.
+const OPENAI_URL = 'https://api.openai.com/v1/chat/completions';
 
 /**
  * Extract form Q&A pairs from rawQuestionData.
@@ -38,6 +39,7 @@ function extractFormAnswers(rawQuestionData) {
  *   Cold = 0–49    → uncertain, not ready, just browsing
  */
 export async function scoreLeadWithAI(lead) {
+  const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   if (!OPENAI_API_KEY) {
     console.warn('[AI Scoring] OPENAI_API_KEY not configured — skipping');
     return null;
