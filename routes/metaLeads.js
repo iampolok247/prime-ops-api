@@ -142,9 +142,36 @@ router.post('/webhook', async (req, res) => {
     const merged = { ...body, ...flat };
 
     // ── Normalise field names (handles snake_case / camelCase / Meta names) ──
-    const name             = merged.full_name || merged.name || merged.fullName || '';
-    const phone            = merged.phone_number || merged.phone || merged.phoneNumber || '';
-    const email            = (merged.email || '').toLowerCase().trim();
+    const name  = merged.full_name || merged.name || merged.fullName || '';
+    let   phone = merged.phone_number || merged.phone || merged.phoneNumber || '';
+    let   email = (merged.email || '').toLowerCase().trim();
+
+    // ── Fallback: scan all merged keys for anything containing 'phone' or 'email' ──
+    // Catches cases where Make.com maps form fields with custom/different key names
+    if (!phone || !email) {
+      for (const [k, v] of Object.entries(merged)) {
+        if (!v || typeof v !== 'string') continue;
+        const key = k.toLowerCase();
+        if (!phone && key.includes('phone')) phone = v;
+        if (!email && key.includes('email')) email = v.toLowerCase().trim();
+      }
+    }
+
+    // ── Also scan inside field_data if it was sent as a flat JSON object string ──
+    // Make.com sometimes serialises field_data as a key:value object instead of array
+    if ((!phone || !email) && typeof body.field_data === 'string') {
+      try {
+        const fd = JSON.parse(body.field_data);
+        if (fd && typeof fd === 'object' && !Array.isArray(fd)) {
+          for (const [k, v] of Object.entries(fd)) {
+            if (!v || typeof v !== 'string') continue;
+            const key = k.toLowerCase();
+            if (!phone && key.includes('phone')) phone = v;
+            if (!email && key.includes('email')) email = v.toLowerCase().trim();
+          }
+        }
+      } catch {}
+    }
     const course           = merged.interestedCourse || merged.interested_course || merged.course || '';
     const metaLeadId       = merged.id || merged.lead_id || merged.leadId || '';
     const metaFormId       = merged.form_id || merged.formId || '';
