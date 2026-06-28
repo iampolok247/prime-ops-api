@@ -12,6 +12,29 @@ import { runRoundRobinAssignment } from '../jobs/roundRobin.js';
 
 const router = express.Router();
 
+// ── SSE clients — push instant updates to open browser tabs ─────────────────
+const sseClients = new Set();
+
+function pushLeadEvent(payload) {
+  const msg = `data: ${JSON.stringify(payload)}\n\n`;
+  sseClients.forEach(res => { try { res.write(msg); } catch { sseClients.delete(res); } });
+}
+
+// GET /api/meta-leads/events — browser connects here, stays open
+// EventSource can't set headers so accept token via query param as fallback
+router.get('/events', (req, res, next) => {
+  if (req.query.token && !req.headers.authorization) {
+    req.headers.authorization = `Bearer ${req.query.token}`;
+  }
+  next();
+}, requireAuth, (req, res) => {
+  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
+  res.flushHeaders();
+  res.write(': connected\n\n'); // initial heartbeat
+  sseClients.add(res);
+  req.on('close', () => sseClients.delete(res));
+});
+
 // ── Roles ────────────────────────────────────────────────────────────────────
 const DM_ROLES      = ['DigitalMarketing'];
 const MANAGE_ROLES  = ['DigitalMarketing', 'Admin', 'SuperAdmin', 'ITAdmin'];
@@ -208,6 +231,9 @@ router.post('/webhook', async (req, res) => {
 
     // Fire AI scoring asynchronously — non-blocking
     scoreLeadAsync(MetaLead, lead._id, lead);
+
+    // Push instant update to all open browser tabs
+    pushLeadEvent({ type: 'NEW_LEAD', leadId: lead.leadId, name: lead.name });
 
     return res.status(201).json({ ok: true, leadId: lead.leadId });
   } catch (e) {
