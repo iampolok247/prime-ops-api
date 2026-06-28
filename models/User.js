@@ -55,7 +55,8 @@ const UserSchema = new mongoose.Schema(
       // 4. Shahriar Arafat
       // 5. Kazi Sazzad
     isActive: { type: Boolean, default: true },
-    joinDate: { type: Date, default: Date.now }
+    joinDate: { type: Date, default: Date.now },
+    availableForInstantLeads: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

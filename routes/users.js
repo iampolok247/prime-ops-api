@@ -23,8 +23,30 @@ router.get('/', requireAuth, async (req, res) => {
  */
 router.get('/admission', requireAuth, authorize(['Admin', 'SuperAdmin', 'HeadOfCreative', 'DigitalMarketing', 'Accountant']), async (req, res) => {
   const users = await User.find({ role: 'Admission', isActive: true })
-    .select('name email role avatar department designation');
+    .select('name email role avatar department designation availableForInstantLeads');
   return res.json({ users });
+});
+
+// Toggle instant lead availability — Admin/DM for any counsellor, counsellor for self
+router.patch('/:id/toggle-availability', requireAuth, async (req, res) => {
+  try {
+    const target = await User.findById(req.params.id);
+    if (!target) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
+
+    const isAdmin = ['Admin', 'SuperAdmin', 'ITAdmin', 'DigitalMarketing'].includes(req.user.role);
+    const isSelf  = String(req.user.id) === String(target._id);
+
+    if (!isAdmin && !isSelf) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Access denied' });
+    }
+
+    target.availableForInstantLeads = !target.availableForInstantLeads;
+    await target.save();
+
+    return res.json({ ok: true, availableForInstantLeads: target.availableForInstantLeads, name: target.name });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
 });
 
 /**
