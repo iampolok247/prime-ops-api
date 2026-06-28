@@ -13,11 +13,35 @@ import { runRoundRobinAssignment } from '../jobs/roundRobin.js';
 const router = express.Router();
 
 // ── SSE clients — push instant updates to open browser tabs ─────────────────
-const sseClients = new Set();
+// Map<userId, Set<res>> — one user may have multiple tabs open
+const sseClients = new Map();
 
+function addClient(userId, res) {
+  if (!sseClients.has(userId)) sseClients.set(userId, new Set());
+  sseClients.get(userId).add(res);
+}
+
+function removeClient(userId, res) {
+  const set = sseClients.get(userId);
+  if (!set) return;
+  set.delete(res);
+  if (set.size === 0) sseClients.delete(userId);
+}
+
+// Push to ALL connected users (admin broadcast)
 function pushLeadEvent(payload) {
   const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  sseClients.forEach(res => { try { res.write(msg); } catch { sseClients.delete(res); } });
+  sseClients.forEach(set => {
+    set.forEach(res => { try { res.write(msg); } catch { /* dead connection */ } });
+  });
+}
+
+// Push only to a specific user (counsellor notification)
+function pushToUser(userId, payload) {
+  const set = sseClients.get(String(userId));
+  if (!set) return;
+  const msg = `data: ${JSON.stringify(payload)}\n\n`;
+  set.forEach(res => { try { res.write(msg); } catch { /* dead connection */ } });
 }
 
 // GET /api/meta-leads/events — browser connects here, stays open
@@ -31,14 +55,16 @@ router.get('/events', (req, res, next) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
   res.flushHeaders();
   res.write(': connected\n\n');
-  sseClients.add(res);
+
+  const userId = String(req.user.id);
+  addClient(userId, res);
 
   // Keepalive every 25s — prevents proxies/routers from closing idle connections
   const keepAlive = setInterval(() => {
-    try { res.write(': keepalive\n\n'); } catch { clearInterval(keepAlive); sseClients.delete(res); }
+    try { res.write(': keepalive\n\n'); } catch { clearInterval(keepAlive); removeClient(userId, res); }
   }, 25000);
 
-  req.on('close', () => { sseClients.delete(res); clearInterval(keepAlive); });
+  req.on('close', () => { removeClient(userId, res); clearInterval(keepAlive); });
 });
 
 // ── Roles ────────────────────────────────────────────────────────────────────
@@ -312,14 +338,24 @@ router.post('/webhook', async (req, res) => {
         autoAssigned: true,
         status:       'Assigned'
       });
-      // Push targeted event to that counsellor + general NEW_LEAD to admin tabs
+      // Broadcast NEW_LEAD to all admin/DM tabs to refresh the list
       pushLeadEvent({
-        type:          'NEW_LEAD',
-        leadId:        lead.leadId,
-        name:          lead.name,
-        assignedTo:    String(counsellor._id),
-        counsellor:    counsellor.name,
-        autoAssigned:  true
+        type:         'NEW_LEAD',
+        leadId:       lead.leadId,
+        name:         lead.name,
+        assignedTo:   String(counsellor._id),
+        counsellor:   counsellor.name,
+        autoAssigned: true
+      });
+      // Push targeted LEAD_ASSIGNED directly to the counsellor's browser
+      pushToUser(String(counsellor._id), {
+        type:    'LEAD_ASSIGNED',
+        leadId:  lead.leadId,
+        name:    lead.name,
+        phone:   lead.phone || '',
+        email:   lead.email || '',
+        course:  lead.interestedCourse || '',
+        link:    '/admission-pipeline'
       });
     } else {
       // No one on duty — push to admin tabs as unassigned
