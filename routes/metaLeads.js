@@ -12,6 +12,13 @@ import { runRoundRobinAssignment } from '../jobs/roundRobin.js';
 
 const router = express.Router();
 
+// ── Routing log — in-memory, last 50 auto-assignments ────────────────────────
+const routingLog = [];
+function logRouting(entry) {
+  routingLog.unshift({ ...entry, at: new Date() });
+  if (routingLog.length > 50) routingLog.pop();
+}
+
 // ── SSE clients — push instant updates to open browser tabs ─────────────────
 // Map<userId, Set<res>> — one user may have multiple tabs open
 const sseClients = new Map();
@@ -338,6 +345,9 @@ router.post('/webhook', async (req, res) => {
         autoAssigned: true,
         status:       'Assigned'
       });
+      // Log for admin routing log panel
+      logRouting({ leadId: lead.leadId, name: lead.name, counsellor: counsellor.name, phone: lead.phone || '' });
+
       // Broadcast NEW_LEAD to all admin/DM tabs to refresh the list
       pushLeadEvent({
         type:         'NEW_LEAD',
@@ -743,6 +753,11 @@ router.post('/rescore', requireAuth, authorize(MANAGE_ROLES), async (req, res) =
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
+});
+
+// ── GET /api/meta-leads/routing-log — recent auto-assignments (Admin/DM) ─────
+router.get('/routing-log', requireAuth, authorize(MANAGE_ROLES), (req, res) => {
+  res.json({ log: routingLog });
 });
 
 // ── TEMPORARY: Force re-score ALL leads regardless of existing score ──────────
