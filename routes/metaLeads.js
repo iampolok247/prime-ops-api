@@ -365,7 +365,7 @@ router.post('/webhook', async (req, res) => {
         phone:   lead.phone || '',
         email:   lead.email || '',
         course:  lead.interestedCourse || '',
-        link:    '/admission-pipeline'
+        link:    '/meta-leads/queue'
       });
     } else {
       // No one on duty — push to admin tabs as unassigned
