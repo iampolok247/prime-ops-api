@@ -30,9 +30,15 @@ router.get('/events', (req, res, next) => {
 }, requireAuth, (req, res) => {
   res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
   res.flushHeaders();
-  res.write(': connected\n\n'); // initial heartbeat
+  res.write(': connected\n\n');
   sseClients.add(res);
-  req.on('close', () => sseClients.delete(res));
+
+  // Keepalive every 25s — prevents proxies/routers from closing idle connections
+  const keepAlive = setInterval(() => {
+    try { res.write(': keepalive\n\n'); } catch { clearInterval(keepAlive); sseClients.delete(res); }
+  }, 25000);
+
+  req.on('close', () => { sseClients.delete(res); clearInterval(keepAlive); });
 });
 
 // ── Roles ────────────────────────────────────────────────────────────────────
