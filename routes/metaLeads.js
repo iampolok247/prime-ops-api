@@ -82,7 +82,10 @@ const VIEW_ROLES    = ['DigitalMarketing', 'Admin', 'SuperAdmin', 'ITAdmin', 'Ad
 const ADMIN_ROLES   = ['Admin', 'SuperAdmin', 'ITAdmin'];
 
 // ── Score field stripping (Admission must NEVER see score) ───────────────────
-const SCORE_FIELDS = ['aiScore', 'aiReasoning', 'aiScoredAt', 'leadTemperature'];
+// aiReasoning is intentionally NOT in this list — counsellors see the
+// qualitative "why" so they can prep for the call, but never the raw
+// score or Hot/Warm/Cold label (avoids biasing how hard they try).
+const SCORE_FIELDS = ['aiScore', 'aiScoredAt', 'leadTemperature'];
 
 function sanitize(leadDoc, role) {
   const obj = leadDoc.toObject ? leadDoc.toObject({ flattenMaps: true }) : { ...leadDoc };
