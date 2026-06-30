@@ -8,6 +8,7 @@ import { requireAuth }  from '../middleware/auth.js';
 import { authorize }    from '../middleware/authorize.js';
 import { scoreLeadAsync } from '../utils/aiScoring.js';
 import { sendMetaCapiEvent } from '../utils/metaCapi.js';
+import CapiEventLog from '../models/CapiEventLog.js';
 import { runRoundRobinAssignment } from '../jobs/roundRobin.js';
 
 const router = express.Router();
@@ -807,14 +808,29 @@ router.patch('/:id/status', requireAuth, authorize(VIEW_ROLES), async (req, res)
     await lead.save();
 
     // Fire Meta CAPI async — never blocks response
+    // sentToCapi only flips true on an actual successful delivery to Meta.
+    // Every attempt (success or failure) is also written to CapiEventLog —
+    // a dedicated, queryable collection separate from the embedded
+    // capiEvents[] array, so DM/Admin can track sends without opening
+    // each lead individually.
     sendMetaCapiEvent(lead, status)
       .then(result => {
-        if (result) {
-          MetaLead.findByIdAndUpdate(lead._id, {
-            sentToCapi: true,  // Col 13 flag
-            $push: { capiEvents: { event: result.event, success: result.success } }
-          }).catch(() => {});
-        }
+        if (!result) return;
+        MetaLead.findByIdAndUpdate(lead._id, {
+          ...(result.success ? { sentToCapi: true } : {}),
+          $push: { capiEvents: { event: result.event, success: result.success, at: new Date() } }
+        }).catch(() => {});
+
+        CapiEventLog.create({
+          lead:          lead._id,
+          leadDisplayId: lead.leadId,
+          leadName:      lead.name,
+          status,
+          event:         result.event,
+          success:       result.success,
+          errorMessage:  result.errorMessage || '',
+          eventsReceived: result.eventsReceived || 0
+        }).catch(() => {});
       })
       .catch(() => {});
 
@@ -848,6 +864,39 @@ router.post('/rescore', requireAuth, authorize(MANAGE_ROLES), async (req, res) =
 // ── GET /api/meta-leads/routing-log — recent auto-assignments (Admin/DM) ─────
 router.get('/routing-log', requireAuth, authorize(MANAGE_ROLES), (req, res) => {
   res.json({ log: routingLog });
+});
+
+// ── GET /api/meta-leads/capi-log — dedicated Meta CAPI send tracking table ────
+// Query params: success ('true'|'false'), event, from, to, page, limit
+router.get('/capi-log', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
+  try {
+    const { success, event, from, to, page = 1, limit = 50 } = req.query;
+    const query = {};
+    if (success === 'true')  query.success = true;
+    if (success === 'false') query.success = false;
+    if (event) query.event = event;
+    if (from || to) {
+      query.createdAt = {};
+      if (from) query.createdAt.$gte = new Date(from);
+      if (to)   query.createdAt.$lte = new Date(new Date(to).setHours(23, 59, 59, 999));
+    }
+
+    const skip  = (Number(page) - 1) * Number(limit);
+    const [total, successCount, failCount, logs] = await Promise.all([
+      CapiEventLog.countDocuments(query),
+      CapiEventLog.countDocuments({ ...query, success: true }),
+      CapiEventLog.countDocuments({ ...query, success: false }),
+      CapiEventLog.find(query).sort({ createdAt: -1 }).skip(skip).limit(Number(limit))
+    ]);
+
+    return res.json({
+      logs, total, successCount, failCount,
+      page: Number(page),
+      pages: Math.ceil(total / Number(limit))
+    });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
 });
 
 // ── TEMPORARY: Force re-score ALL leads regardless of existing score ──────────

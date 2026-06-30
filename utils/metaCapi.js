@@ -60,13 +60,13 @@ export async function sendMetaCapiEvent(lead, status) {
 
     if (res.ok) {
       console.log(`[Meta CAPI] ✅ ${eventName} sent for ${lead.leadId} — events_received: ${data.events_received}`);
-      return { success: true, event: eventName };
+      return { success: true, event: eventName, eventsReceived: data.events_received || 0 };
     } else {
       console.error(`[Meta CAPI] ❌ ${eventName} failed for ${lead.leadId}:`, data);
-      return { success: false, event: eventName };
+      return { success: false, event: eventName, errorMessage: data?.error?.message || JSON.stringify(data) };
     }
   } catch (e) {
     console.error('[Meta CAPI] Error:', e.message);
-    return { success: false, event: eventName };
+    return { success: false, event: eventName, errorMessage: e.message };
   }
 }
