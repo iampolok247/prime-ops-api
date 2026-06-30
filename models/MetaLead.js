@@ -124,6 +124,9 @@ const MetaLeadSchema = new mongoose.Schema(
     notes:            { type: String, default: '' },
     nextFollowUpDate: { type: Date },
     followUps:        [FollowUpSchema],
+    // Auto-flagged by cron when a follow-up lead is stale (60+ days, 6+ touches, no conversion)
+    flaggedStale:      { type: Boolean, default: false },
+    flaggedStaleAt:    { type: Date },
 
     // ── Outcome ───────────────────────────────────────────────────────────────
     admittedToCourse: { type: String, default: '' },

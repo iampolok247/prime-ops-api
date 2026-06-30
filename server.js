@@ -36,6 +36,7 @@ import attendanceRoutes from "./routes/attendance.js"; // OPS Attendance trackin
 import metaLeadsRoutes from "./routes/metaLeads.js";   // Meta Lead Management (new CRM module)
 import cron from "node-cron";
 import { runRoundRobinAssignment } from "./jobs/roundRobin.js";
+import { runFollowUpDueReminders, runStaleFollowUpFlagging } from "./jobs/followUpReminders.js";
 
 dotenv.config();
 
@@ -155,6 +156,18 @@ connectDB(process.env.MONGO_URI)
     cron.schedule('0 7 * * *', () => {
       console.log('[Cron] Triggering 1 PM round-robin assignment…');
       runRoundRobinAssignment().catch(e => console.error('[Cron] Round-robin failed:', e.message));
+    }, { timezone: 'UTC' });
+
+    // Daily 9 AM BST (= 03:00 UTC) — notify counsellors of follow-ups due today
+    cron.schedule('0 3 * * *', () => {
+      console.log('[Cron] Triggering follow-up due reminders…');
+      runFollowUpDueReminders().catch(e => console.error('[Cron] Follow-up reminders failed:', e.message));
+    }, { timezone: 'UTC' });
+
+    // Daily 9:30 AM BST (= 03:30 UTC) — flag stale follow-up leads for DM review
+    cron.schedule('30 3 * * *', () => {
+      console.log('[Cron] Triggering stale follow-up flagging…');
+      runStaleFollowUpFlagging().catch(e => console.error('[Cron] Stale flagging failed:', e.message));
     }, { timezone: 'UTC' });
   })
   .catch((err) => {

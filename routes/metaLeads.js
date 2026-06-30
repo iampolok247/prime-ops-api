@@ -435,7 +435,8 @@ router.get('/stats', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
 
     const [
       pending, validated, rejected,
-      statusCounts, tempCounts
+      statusCounts, tempCounts,
+      followUpOverdue, followUpStuck
     ] = await Promise.all([
       MetaLead.countDocuments({ ...baseQ, validationStatus: 'pending' }),
       MetaLead.countDocuments({ ...baseQ, validationStatus: 'validated', assignedTo: null }),
@@ -447,7 +448,11 @@ router.get('/stats', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
       MetaLead.aggregate([
         { $match: { ...baseQ, leadTemperature: { $in: ['Hot', 'Warm', 'Cold'] } } },
         { $group: { _id: '$leadTemperature', count: { $sum: 1 } } }
-      ])
+      ]),
+      // #2: overdue follow-ups (next date already passed)
+      MetaLead.countDocuments({ ...baseQ, status: 'In Follow Up', nextFollowUpDate: { $lt: new Date() } }),
+      // #1: "stuck" — 5+ touches, still in follow-up, never converted
+      MetaLead.countDocuments({ ...baseQ, status: 'In Follow Up', $expr: { $gte: [{ $size: { $ifNull: ['$followUps', []] } }, 5] } })
     ]);
 
     const byStatus      = {};
@@ -455,7 +460,10 @@ router.get('/stats', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
     statusCounts.forEach(s => { byStatus[s._id]      = s.count; });
     tempCounts.forEach(t   => { byTemperature[t._id] = t.count; });
 
-    return res.json({ pending, validatedUnassigned: validated, rejected, byStatus, byTemperature });
+    return res.json({
+      pending, validatedUnassigned: validated, rejected, byStatus, byTemperature,
+      followUpOverdue, followUpStuck
+    });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
@@ -471,7 +479,8 @@ router.get('/', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
     const {
       validationStatus, status, temperature, minScore,
       platform, from, to,
-      page = 1, limit = 50, q, unassignedOnly, assignedTo
+      page = 1, limit = 50, q, unassignedOnly, assignedTo,
+      overdueOnly, stuckOnly
     } = req.query;
 
     const query = { isDeleted: false };
@@ -486,6 +495,14 @@ router.get('/', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
     if (temperature)      query.leadTemperature  = temperature;         // Hot / Warm / Cold
     if (platform)         query.platform         = platform;
     if (unassignedOnly === 'true') query.assignedTo = null;
+    if (overdueOnly === 'true') {
+      query.status = 'In Follow Up';
+      query.nextFollowUpDate = { $lt: new Date() };
+    }
+    if (stuckOnly === 'true') {
+      query.status = 'In Follow Up';
+      query.$expr = { $gte: [{ $size: { $ifNull: ['$followUps', []] } }, 5] };
+    }
 
     // Score filter: only leads with aiScore >= minScore
     if (minScore) query.aiScore = { $gte: Number(minScore) };
@@ -671,6 +688,75 @@ router.post('/bulk-assign', requireAuth, authorize(MANAGE_ROLES), async (req, re
     );
 
     return res.json({ ok: true, assigned: result.modifiedCount });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PATCH /api/meta-leads/bulk-reschedule  — #3 push multiple follow-ups to a new date
+// Body: { leadIds: [...], nextFollowUpDate } OR { leadIds: [...], pushDays: N }
+// ═══════════════════════════════════════════════════════════════════════════════
+router.patch('/bulk-reschedule', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
+  try {
+    const { leadIds, nextFollowUpDate, pushDays } = req.body || {};
+    if (!Array.isArray(leadIds) || leadIds.length === 0) {
+      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'leadIds array required' });
+    }
+    if (!nextFollowUpDate && !pushDays) {
+      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'nextFollowUpDate or pushDays required' });
+    }
+
+    const matchQuery = { _id: { $in: leadIds }, isDeleted: false };
+    // Counsellors can only reschedule their own leads
+    if (req.user.role === 'Admission') matchQuery.assignedTo = req.user.id;
+
+    let result;
+    if (nextFollowUpDate) {
+      // Set all selected leads to the same fixed date
+      result = await MetaLead.updateMany(matchQuery, { $set: { nextFollowUpDate: new Date(nextFollowUpDate) } });
+    } else {
+      // Push each lead's existing date forward by N days (or from today if none set)
+      const leads = await MetaLead.find(matchQuery).select('nextFollowUpDate');
+      const ops = leads.map(lead => {
+        const base = lead.nextFollowUpDate ? new Date(lead.nextFollowUpDate) : new Date();
+        base.setDate(base.getDate() + Number(pushDays));
+        return { updateOne: { filter: { _id: lead._id }, update: { $set: { nextFollowUpDate: base } } } };
+      });
+      if (ops.length) await MetaLead.bulkWrite(ops);
+      result = { modifiedCount: ops.length };
+    }
+
+    return res.json({ ok: true, rescheduled: result.modifiedCount });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PATCH /api/meta-leads/:id/log-touch  — #6 "Mark as called" — logs a touchpoint
+// without changing status or follow-up date. Lightweight alternative to full
+// status update when counsellor just wants to record they made contact.
+// ═══════════════════════════════════════════════════════════════════════════════
+router.patch('/:id/log-touch', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
+  try {
+    const { note, outcome } = req.body || {}; // outcome: 'Called' | 'No Show' | 'No Answer'
+    const lead = await MetaLead.findOne({ _id: req.params.id, isDeleted: false });
+    if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+
+    if (req.user.role === 'Admission' && String(lead.assignedTo) !== String(req.user.id)) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'You can only update your own leads' });
+    }
+
+    lead.followUps.push({
+      note: note || outcome || 'Touchpoint logged',
+      at:   new Date(),
+      by:   req.user.id
+    });
+    await lead.save();
+
+    const populated = await MetaLead.findById(lead._id).populate('followUps.by', 'name email');
+    return res.json({ ok: true, lead: sanitize(populated, req.user.role) });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
