@@ -7,7 +7,7 @@ import User             from '../models/User.js';
 import { requireAuth }  from '../middleware/auth.js';
 import { authorize }    from '../middleware/authorize.js';
 import { scoreLeadAsync } from '../utils/aiScoring.js';
-import { sendMetaCapiEvent } from '../utils/metaCapi.js';
+import { sendMetaCapiEvent, STATUS_EVENT_MAP } from '../utils/metaCapi.js';
 import CapiEventLog from '../models/CapiEventLog.js';
 import { runRoundRobinAssignment } from '../jobs/roundRobin.js';
 
@@ -435,7 +435,9 @@ router.post('/', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
 router.get('/stats', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
   try {
     const baseQ = { isDeleted: false };
-    if (req.user.role === 'Admission') baseQ.assignedTo = req.user.id;
+    // Aggregate $match does NOT auto-cast strings to ObjectId like find()/countDocuments() do —
+    // must cast explicitly or the aggregate stages below silently match zero documents.
+    if (req.user.role === 'Admission') baseQ.assignedTo = mongoose.Types.ObjectId.createFromHexString(req.user.id);
 
     const [
       pending, validated, rejected,
@@ -791,6 +793,7 @@ router.patch('/:id/status', requireAuth, authorize(VIEW_ROLES), async (req, res)
       }
     }
 
+    const statusChanged = lead.status !== status; // reschedules resend the same status — not a real transition
     lead.status = status;
     if (notes              !== undefined) lead.notes              = notes;
     if (reason             !== undefined) lead.reason             = reason;             // Col 11
@@ -810,32 +813,21 @@ router.patch('/:id/status', requireAuth, authorize(VIEW_ROLES), async (req, res)
 
     await lead.save();
 
-    // Fire Meta CAPI async — never blocks response
-    // sentToCapi only flips true on an actual successful delivery to Meta.
-    // Every attempt (success or failure) is also written to CapiEventLog —
-    // a dedicated, queryable collection separate from the embedded
-    // capiEvents[] array, so DM/Admin can track sends without opening
-    // each lead individually.
-    sendMetaCapiEvent(lead, status)
-      .then(result => {
-        if (!result) return;
-        MetaLead.findByIdAndUpdate(lead._id, {
-          ...(result.success ? { sentToCapi: true } : {}),
-          $push: { capiEvents: { event: result.event, success: result.success, at: new Date() } }
-        }).catch(() => {});
-
-        CapiEventLog.create({
-          lead:          lead._id,
-          leadDisplayId: lead.leadId,
-          leadName:      lead.name,
-          status,
-          event:         result.event,
-          success:       result.success,
-          errorMessage:  result.errorMessage || '',
-          eventsReceived: result.eventsReceived || 0
-        }).catch(() => {});
-      })
-      .catch(() => {});
+    // Queue a CAPI event instead of auto-firing. DM reviews the queue and
+    // sends selected/all events in one click from the Meta CAPI Tracking
+    // page — never fires automatically, so reschedules and accidental
+    // status flips can't inflate Meta's conversion counts.
+    const eventName = STATUS_EVENT_MAP[status];
+    if (eventName && statusChanged) {
+      CapiEventLog.create({
+        lead:          lead._id,
+        leadDisplayId: lead.leadId,
+        leadName:      lead.name,
+        leadStatus:    status,
+        event:         eventName,
+        sendStatus:    'pending'
+      }).catch(() => {});
+    }
 
     const populated = await MetaLead.findById(lead._id)
       .populate('assignedTo', 'name email role')
@@ -869,14 +861,13 @@ router.get('/routing-log', requireAuth, authorize(MANAGE_ROLES), (req, res) => {
   res.json({ log: routingLog });
 });
 
-// ── GET /api/meta-leads/capi-log — dedicated Meta CAPI send tracking table ────
-// Query params: success ('true'|'false'), event, from, to, page, limit
+// ── GET /api/meta-leads/capi-log — dedicated Meta CAPI send queue/tracking table ──
+// Query params: sendStatus ('pending'|'sent'|'failed'), event, from, to, page, limit
 router.get('/capi-log', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
-    const { success, event, from, to, page = 1, limit = 50 } = req.query;
+    const { sendStatus, event, from, to, page = 1, limit = 50 } = req.query;
     const query = {};
-    if (success === 'true')  query.success = true;
-    if (success === 'false') query.success = false;
+    if (sendStatus) query.sendStatus = sendStatus;
     if (event) query.event = event;
     if (from || to) {
       query.createdAt = {};
@@ -885,18 +876,78 @@ router.get('/capi-log', requireAuth, authorize(MANAGE_ROLES), async (req, res) =
     }
 
     const skip  = (Number(page) - 1) * Number(limit);
-    const [total, successCount, failCount, logs] = await Promise.all([
+    const [total, pendingCount, sentCount, failedCount, logs] = await Promise.all([
       CapiEventLog.countDocuments(query),
-      CapiEventLog.countDocuments({ ...query, success: true }),
-      CapiEventLog.countDocuments({ ...query, success: false }),
+      CapiEventLog.countDocuments({ ...query, sendStatus: 'pending' }),
+      CapiEventLog.countDocuments({ ...query, sendStatus: 'sent' }),
+      CapiEventLog.countDocuments({ ...query, sendStatus: 'failed' }),
       CapiEventLog.find(query).sort({ createdAt: -1 }).skip(skip).limit(Number(limit))
     ]);
 
     return res.json({
-      logs, total, successCount, failCount,
+      logs, total, pendingCount, sentCount, failedCount,
       page: Number(page),
       pages: Math.ceil(total / Number(limit))
     });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// ── POST /api/meta-leads/capi-log/send — DM sends selected or all pending events ──
+// Body: { logIds: [...] } to send specific entries, or { sendAll: true } for every pending one.
+// Sends one-by-one (not batched) so each event gets a definite, individually
+// confirmed success/failure — needed for accurate DM tracking.
+router.post('/capi-log/send', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
+  try {
+    const { logIds, sendAll } = req.body || {};
+
+    const query = sendAll
+      ? { sendStatus: 'pending' }
+      : { _id: { $in: Array.isArray(logIds) ? logIds : [] }, sendStatus: 'pending' };
+
+    const pending = await CapiEventLog.find(query).populate('lead');
+    if (pending.length === 0) {
+      return res.json({ ok: true, sent: 0, failed: 0, message: 'No pending events to send' });
+    }
+
+    let sentCount = 0, failedCount = 0;
+    for (const logEntry of pending) {
+      if (!logEntry.lead) {
+        logEntry.sendStatus = 'failed';
+        logEntry.errorMessage = 'Lead no longer exists';
+        await logEntry.save();
+        failedCount++;
+        continue;
+      }
+
+      const result = await sendMetaCapiEvent(logEntry.lead, logEntry.leadStatus);
+
+      logEntry.sentAt = new Date();
+      logEntry.sentBy = req.user.id;
+
+      if (result?.success) {
+        logEntry.sendStatus = 'sent';
+        logEntry.eventsReceived = result.eventsReceived || 0;
+        sentCount++;
+
+        await MetaLead.findByIdAndUpdate(logEntry.lead._id, {
+          sentToCapi: true,
+          $push: { capiEvents: { event: logEntry.event, success: true, at: new Date() } }
+        });
+      } else {
+        logEntry.sendStatus = 'failed';
+        logEntry.errorMessage = result?.errorMessage || 'Unknown error';
+        failedCount++;
+
+        await MetaLead.findByIdAndUpdate(logEntry.lead._id, {
+          $push: { capiEvents: { event: logEntry.event, success: false, at: new Date() } }
+        });
+      }
+      await logEntry.save();
+    }
+
+    return res.json({ ok: true, sent: sentCount, failed: failedCount });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }

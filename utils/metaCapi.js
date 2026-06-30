@@ -4,7 +4,7 @@ const PIXEL_ID    = process.env.META_PIXEL_ID;
 const ACCESS_TOKEN = process.env.META_ACCESS_TOKEN;
 
 // Lead status → Meta standard event name
-const STATUS_EVENT_MAP = {
+export const STATUS_EVENT_MAP = {
   Counseling:     'Lead',
   Admitted:       'CompleteRegistration',
   'In Follow Up': 'ViewContent',
