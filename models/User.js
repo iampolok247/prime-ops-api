@@ -56,7 +56,8 @@ const UserSchema = new mongoose.Schema(
       // 5. Kazi Sazzad
     isActive: { type: Boolean, default: true },
     joinDate: { type: Date, default: Date.now },
-    availableForInstantLeads: { type: Boolean, default: false }
+    availableForInstantLeads: { type: Boolean, default: false },
+    onLeave: { type: Boolean, default: false }
   },
   { timestamps: true }
 );

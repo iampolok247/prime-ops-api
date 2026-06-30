@@ -560,4 +560,93 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
   }
 });
 
+/**
+ * GET /api/reports/meta-lead-team-stats?from=YYYY-MM-DD&to=YYYY-MM-DD&userId=...
+ * Same shape as admission-team-stats but for MetaLead (the Meta/Facebook lead CRM).
+ * Returns: totalAssigned, hot/warm/cold counts, admitted, notInterested,
+ * conversionRate, perUserStats (when no specific userId given).
+ */
+router.get('/meta-lead-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin', 'DigitalMarketing', 'ITAdmin', 'Admission']), async (req, res) => {
+  try {
+    const { from, to, userId } = req.query;
+    const { start, end } = parseRange(from, to);
+
+    const MetaLead = (await import('../models/MetaLead.js')).default;
+    const User     = (await import('../models/User.js')).default;
+    const mongoose  = (await import('mongoose')).default;
+
+    let targetUserId = null;
+    if (req.user.role === 'Admission') {
+      targetUserId = req.user.id;
+    } else {
+      targetUserId = userId || null;
+    }
+
+    const matchQuery = {
+      isDeleted: false,
+      assignedAt: { $gte: start, $lt: end }
+    };
+
+    if (targetUserId) {
+      matchQuery.assignedTo = mongoose.Types.ObjectId.createFromHexString(targetUserId);
+    } else {
+      const admissionUsers = await User.find({ role: 'Admission' }).select('_id');
+      matchQuery.assignedTo = { $in: admissionUsers.map(u => u._id) };
+    }
+
+    const leads = await MetaLead.find(matchQuery)
+      .select('status leadTemperature assignedTo aiScore');
+
+    const totalAssigned   = leads.length;
+    const hot              = leads.filter(l => l.leadTemperature === 'Hot').length;
+    const warm             = leads.filter(l => l.leadTemperature === 'Warm').length;
+    const cold              = leads.filter(l => l.leadTemperature === 'Cold').length;
+    const inFollowUp        = leads.filter(l => l.status === 'In Follow Up').length;
+    const counseling        = leads.filter(l => l.status === 'Counseling').length;
+    const admitted          = leads.filter(l => l.status === 'Admitted').length;
+    const notInterested     = leads.filter(l => ['Not Interested', 'Not Admitted'].includes(l.status)).length;
+    const conversionRate    = totalAssigned > 0 ? Math.round((admitted / totalAssigned) * 1000) / 10 : 0;
+
+    let perUserStats = null;
+    if (!targetUserId) {
+      const userMap = new Map();
+      leads.forEach(lead => {
+        const key = String(lead.assignedTo);
+        if (!userMap.has(key)) {
+          userMap.set(key, { totalAssigned: 0, hot: 0, warm: 0, cold: 0, admitted: 0, notInterested: 0 });
+        }
+        const s = userMap.get(key);
+        s.totalAssigned++;
+        if (lead.leadTemperature === 'Hot') s.hot++;
+        if (lead.leadTemperature === 'Warm') s.warm++;
+        if (lead.leadTemperature === 'Cold') s.cold++;
+        if (lead.status === 'Admitted') s.admitted++;
+        if (['Not Interested', 'Not Admitted'].includes(lead.status)) s.notInterested++;
+      });
+
+      const userIds = Array.from(userMap.keys());
+      const users = await User.find({ _id: { $in: userIds } }).select('name');
+      const usersById = {};
+      users.forEach(u => { usersById[String(u._id)] = u.name; });
+
+      perUserStats = Array.from(userMap.entries()).map(([key, stats]) => ({
+        userId: key,
+        userName: usersById[key] || 'Unknown',
+        conversionRate: stats.totalAssigned > 0 ? Math.round((stats.admitted / stats.totalAssigned) * 1000) / 10 : 0,
+        ...stats
+      })).sort((a, b) => b.totalAssigned - a.totalAssigned);
+    }
+
+    return res.json({
+      range: { from: from || null, to: to || null },
+      totalAssigned, hot, warm, cold, inFollowUp, counseling,
+      admitted, notInterested, conversionRate,
+      perUserStats
+    });
+  } catch (e) {
+    console.error('Meta lead team stats error:', e);
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
 export default router;

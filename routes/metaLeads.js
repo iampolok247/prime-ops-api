@@ -140,7 +140,8 @@ async function pickOnDutyCounsellor() {
   const onDuty = await User.find({
     role:                     'Admission',
     isActive:                 true,
-    availableForInstantLeads: true
+    availableForInstantLeads: true,
+    onLeave:                  { $ne: true }
   }).lean();
 
   if (onDuty.length === 0) return null;
@@ -470,18 +471,21 @@ router.get('/', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
     const {
       validationStatus, status, temperature, minScore,
       platform, from, to,
-      page = 1, limit = 50, q
+      page = 1, limit = 50, q, unassignedOnly, assignedTo
     } = req.query;
 
     const query = { isDeleted: false };
 
     // Admission sees only their own leads
     if (req.user.role === 'Admission') query.assignedTo = req.user.id;
+    // Admin/DM can filter by a specific counsellor
+    else if (assignedTo) query.assignedTo = assignedTo;
 
     if (validationStatus) query.validationStatus = validationStatus;
     if (status)           query.status           = status;
     if (temperature)      query.leadTemperature  = temperature;         // Hot / Warm / Cold
     if (platform)         query.platform         = platform;
+    if (unassignedOnly === 'true') query.assignedTo = null;
 
     // Score filter: only leads with aiScore >= minScore
     if (minScore) query.aiScore = { $gte: Number(minScore) };

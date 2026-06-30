@@ -23,11 +23,12 @@ router.get('/', requireAuth, async (req, res) => {
  */
 router.get('/admission', requireAuth, authorize(['Admin', 'SuperAdmin', 'HeadOfCreative', 'DigitalMarketing', 'Accountant']), async (req, res) => {
   const users = await User.find({ role: 'Admission', isActive: true })
-    .select('name email role avatar department designation availableForInstantLeads');
+    .select('name email role avatar department designation availableForInstantLeads onLeave');
   return res.json({ users });
 });
 
 // Toggle instant lead availability — Admin/DM for any counsellor, counsellor for self
+// Blocked while onLeave is true — must turn off leave first
 router.patch('/:id/toggle-availability', requireAuth, async (req, res) => {
   try {
     const target = await User.findById(req.params.id);
@@ -40,10 +41,46 @@ router.patch('/:id/toggle-availability', requireAuth, async (req, res) => {
       return res.status(403).json({ code: 'FORBIDDEN', message: 'Access denied' });
     }
 
-    target.availableForInstantLeads = !target.availableForInstantLeads;
+    const turningOn = !target.availableForInstantLeads;
+    if (turningOn && target.onLeave) {
+      return res.status(400).json({ code: 'ON_LEAVE', message: 'Cannot go On Duty while on leave. Turn off leave first.' });
+    }
+
+    target.availableForInstantLeads = turningOn;
     await target.save();
 
     return res.json({ ok: true, availableForInstantLeads: target.availableForInstantLeads, name: target.name });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// Toggle leave status — Admin/DM for any counsellor, counsellor for self
+// Turning leave ON forces On Duty OFF and locks it until leave is turned off
+router.patch('/:id/toggle-leave', requireAuth, async (req, res) => {
+  try {
+    const target = await User.findById(req.params.id);
+    if (!target) return res.status(404).json({ code: 'NOT_FOUND', message: 'User not found' });
+
+    const isAdmin = ['Admin', 'SuperAdmin', 'ITAdmin', 'DigitalMarketing'].includes(req.user.role);
+    const isSelf  = String(req.user.id) === String(target._id);
+
+    if (!isAdmin && !isSelf) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Access denied' });
+    }
+
+    target.onLeave = !target.onLeave;
+    if (target.onLeave) {
+      target.availableForInstantLeads = false; // force off duty, locked while on leave
+    }
+    await target.save();
+
+    return res.json({
+      ok: true,
+      onLeave: target.onLeave,
+      availableForInstantLeads: target.availableForInstantLeads,
+      name: target.name
+    });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
