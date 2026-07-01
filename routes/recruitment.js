@@ -186,16 +186,29 @@ router.post(
   authorize(R_WRITE),
   async (req, res) => {
     try {
-      const { employerId, jobId, date } = req.body;
+      const { employerId, jobId, date, salary } = req.body;
       const emp = await Employer.findById(employerId);
       const job = await Job.findById(jobId);
       if (!emp || !job) return res.status(400).json({ message: 'Invalid employer or job' });
+
+      const parsedSalary = salary === '' || salary === undefined || salary === null
+        ? undefined
+        : Number(salary);
+
+      if (parsedSalary !== undefined && Number.isNaN(parsedSalary)) {
+        return res.status(400).json({ message: 'Salary must be a valid number' });
+      }
 
       const updated = await Candidate.findByIdAndUpdate(
         req.params.id,
         {
           recruited: true,
-          recruitedMeta: { employer: emp._id, job: job._id, date: date || new Date() }
+          recruitedMeta: {
+            employer: emp._id,
+            job: job._id,
+            date: date || new Date(),
+            salary: parsedSalary
+          }
         },
         { new: true }
       );

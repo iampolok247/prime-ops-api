@@ -4,7 +4,8 @@ import mongoose from 'mongoose';
 const RecruitedMetaSchema = new mongoose.Schema({
   employer: { type: mongoose.Schema.Types.ObjectId, ref: 'RecruitmentEmployer' },
   job: { type: mongoose.Schema.Types.ObjectId, ref: 'RecruitmentJob' },
-  date: { type: Date }
+  date: { type: Date },
+  salary: { type: Number }
 }, { _id: false });
 
 const RecruitmentCandidateSchema = new mongoose.Schema({
