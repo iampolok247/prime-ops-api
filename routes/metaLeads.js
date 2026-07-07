@@ -476,15 +476,36 @@ router.get('/stats', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// GET /api/meta-leads/courses
+// Unique interestedCourse values for dropdown filters.
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/courses', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
+  try {
+    const query = { isDeleted: false };
+    if (req.user.role === 'Admission') query.assignedTo = req.user.id;
+
+    const courses = await MetaLead.distinct('interestedCourse', query);
+    const cleaned = courses
+      .map(c => (typeof c === 'string' ? c.trim() : ''))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b));
+
+    return res.json({ courses: cleaned });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // GET /api/meta-leads
 // DM/Admin: all leads. Admission: only their assigned leads. Score stripped for Admission.
-// Query params: validationStatus, status, temperature, minScore, platform, from, to, q, page, limit
+// Query params: validationStatus, status, temperature, minScore, platform, course, from, to, q, page, limit
 // ═══════════════════════════════════════════════════════════════════════════════
 router.get('/', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
   try {
     const {
       validationStatus, status, temperature, minScore,
-      platform, from, to,
+      platform, course, from, to,
       page = 1, limit = 50, q, unassignedOnly, assignedTo,
       overdueOnly, stuckOnly
     } = req.query;
@@ -500,6 +521,10 @@ router.get('/', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
     if (status)           query.status           = status;
     if (temperature)      query.leadTemperature  = temperature;         // Hot / Warm / Cold
     if (platform)         query.platform         = platform;
+    if (course) {
+      const courseRe = new RegExp(course.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.interestedCourse = courseRe;
+    }
     if (unassignedOnly === 'true') query.assignedTo = null;
     if (overdueOnly === 'true') {
       query.status = 'In Follow Up';
