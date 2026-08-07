@@ -44,6 +44,14 @@ const LeadSchema = new mongoose.Schema(
         by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
       }
     ],
+    // Admin-only comments, visible to the admission team once saved
+    adminComments: [
+      {
+        text: { type: String, required: true, trim: true },
+        at: { type: Date, default: Date.now },
+        by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+      }
+    ],
     // Custom fields from boost/ads forms (flexible key-value pairs)
     customFields: {
       type: Map,

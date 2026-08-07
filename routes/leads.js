@@ -385,11 +385,47 @@ router.get('/:id/history', requireAuth, async (req, res) => {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
   }
 
-  // populate follow-up authors
+  // populate follow-up and admin comment authors
   await Lead.populate(lead, { path: 'followUps.by', select: 'name email' });
+  await Lead.populate(lead, { path: 'adminComments.by', select: 'name email' });
   return res.json({ lead });
 });
 
+// Add an admin-only comment on a lead. Only Admin/SuperAdmin may add one;
+// visible to whoever can already view the lead's history (incl. the
+// assigned Admission team member) once saved.
+router.post('/:id/admin-comment', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res) => {
+  const { text } = req.body || {};
+  if (!text || !text.trim()) {
+    return res.status(400).json({ code: 'INVALID_INPUT', message: 'Comment text is required' });
+  }
+  const lead = await Lead.findById(req.params.id);
+  if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+
+  lead.adminComments = lead.adminComments || [];
+  lead.adminComments.push({ text: text.trim(), at: new Date(), by: req.user.id });
+  await lead.save();
+
+  await logActivity(
+    req.user.id,
+    req.user.name,
+    req.user.email,
+    req.user.role,
+    'UPDATE',
+    'Lead',
+    lead.name,
+    `Added admin comment on lead: ${lead.name} (${lead.leadId})`
+  );
+
+  const populated = await Lead.findById(lead._id)
+    .populate('assignedTo', 'name email role')
+    .populate('assignedBy', 'name email role')
+    .populate('admittedToCourse', 'name')
+    .populate('admittedToBatch', 'name');
+  await Lead.populate(populated, { path: 'followUps.by', select: 'name email' });
+  await Lead.populate(populated, { path: 'adminComments.by', select: 'name email' });
+  return res.json({ lead: populated });
+});
 
 // Update status (DM only for now; Phase 4: Admission will change from their side)
 router.patch('/:id/status', requireAuth, authorize(['DigitalMarketing']), async (req, res) => {
