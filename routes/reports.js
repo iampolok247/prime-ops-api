@@ -343,132 +343,23 @@ router.get('/admission-metrics-debug', requireAuth, async (req, res) => {
 /**
  * GET /api/reports/admission-team-stats?from=YYYY-MM-DD&to=YYYY-MM-DD&userId=...
  * Returns:
- * - totalAssignedLeads: all leads assigned to user(s) created in period
- * - remainingNewLeads: leads still in "Assigned" status (not yet counseled)
- * - firstTimeCalls: leads with exactly 1 follow-up note (first counseling)
- * - followUpCalls: leads with 2+ follow-up notes
- * - admitted: leads with "Admitted" status
- * - notInterested: leads with "Not Interested" or "Not Admitted" status
+ * - totalAssignedLeads / remainingNewLeads: pipeline snapshot from the Lead collection
+ *   (leads assigned to the user, created within the period; remaining = still "Assigned")
+ * - firstTimeCalls / followUpCalls / admitted / notInterested: sourced from LeadActivity
+ *   (actionDate within period, grouped by advisor) — same source and definition used by
+ *   /admission-metrics, so a team member's own "My Metrics" numbers match what an Admin
+ *   sees here for that same member and period.
  */
 router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin', 'Accountant', 'HeadOfCreative', 'Admission']), async (req, res) => {
   try {
     const { from, to, userId } = req.query;
     const { start, end } = parseRange(from, to);
-    
-    const Lead = (await import('../models/Lead.js')).default;
-    const User = (await import('../models/User.js')).default;
-    const mongoose = (await import('mongoose')).default;
-    
-    // Determine target user(s)
-    let targetUserId = null;
-    if (req.user.role === 'Admission') {
-      targetUserId = req.user.id;
-    } else if (['Admin', 'SuperAdmin', 'HeadOfCreative', 'Accountant'].includes(req.user.role)) {
-      targetUserId = userId || null;
-    } else {
-      return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
-    }
-    
-    // Build match query
-    const matchQuery = {
-      createdAt: { $gte: start, $lt: end }
-    };
-    
-    if (targetUserId) {
-      matchQuery.assignedTo = mongoose.Types.ObjectId.createFromHexString(targetUserId);
-    } else {
-      // Get all admission users
-      const admissionUsers = await User.find({ role: 'Admission' }).select('_id');
-      matchQuery.assignedTo = { $in: admissionUsers.map(u => u._id) };
-    }
-    
-    // Fetch all leads matching criteria
-    const leads = await Lead.find(matchQuery).select('status followUps assignedTo');
-    
-    // Calculate metrics
-    const totalAssignedLeads = leads.length;
-    const remainingNewLeads = leads.filter(l => l.status === 'Assigned').length;
-    const firstTimeCalls = leads.filter(l => (l.followUps?.length || 0) === 1).length;
-    const followUpCalls = leads.filter(l => (l.followUps?.length || 0) >= 2).length;
-    const admitted = leads.filter(l => l.status === 'Admitted').length;
-    const notInterested = leads.filter(l => ['Not Interested', 'Not Admitted'].includes(l.status)).length;
-    
-    // If all team members, also return per-user breakdown
-    let perUserStats = null;
-    if (!targetUserId) {
-      const userMap = new Map();
-      leads.forEach(lead => {
-        const key = String(lead.assignedTo);
-        if (!userMap.has(key)) {
-          userMap.set(key, { 
-            totalAssignedLeads: 0, 
-            remainingNewLeads: 0, 
-            firstTimeCalls: 0, 
-            followUpCalls: 0, 
-            admitted: 0, 
-            notInterested: 0 
-          });
-        }
-        const stats = userMap.get(key);
-        stats.totalAssignedLeads++;
-        if (lead.status === 'Assigned') stats.remainingNewLeads++;
-        if ((lead.followUps?.length || 0) === 1) stats.firstTimeCalls++;
-        if ((lead.followUps?.length || 0) >= 2) stats.followUpCalls++;
-        if (lead.status === 'Admitted') stats.admitted++;
-        if (['Not Interested', 'Not Admitted'].includes(lead.status)) stats.notInterested++;
-      });
-      
-      // Get user names
-      const userIds = Array.from(userMap.keys());
-      const users = await User.find({ _id: { $in: userIds } }).select('name');
-      const usersById = {};
-      users.forEach(u => { usersById[String(u._id)] = u.name; });
-      
-      perUserStats = [];
-      for (const [key, stats] of userMap.entries()) {
-        perUserStats.push({
-          userId: key,
-          userName: usersById[key] || 'Unknown',
-          ...stats
-        });
-      }
-    }
-    
-    return res.json({
-      range: { from: from || null, to: to || null },
-      totalAssignedLeads,
-      remainingNewLeads,
-      firstTimeCalls,
-      followUpCalls,
-      admitted,
-      notInterested,
-      perUserStats
-    });
-  } catch (e) {
-    console.error('Admission team stats error:', e);
-    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
-  }
-});
 
-/**
- * GET /api/reports/admission-team-stats?from=YYYY-MM-DD&to=YYYY-MM-DD&userId=...
- * Returns:
- * - totalAssignedLeads: all leads assigned to user(s) created in period
- * - remainingNewLeads: leads still in "Assigned" status (not yet counseled)
- * - firstTimeCalls: leads with exactly 1 follow-up note (first counseling)
- * - followUpCalls: leads with 2+ follow-up notes
- * - admitted: leads with "Admitted" status
- * - notInterested: leads with "Not Interested" or "Not Admitted" status
- */
-router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin', 'Accountant', 'HeadOfCreative', 'Admission']), async (req, res) => {
-  try {
-    const { from, to, userId } = req.query;
-    const { start, end } = parseRange(from, to);
-    
     const Lead = (await import('../models/Lead.js')).default;
     const User = (await import('../models/User.js')).default;
+    const LeadActivity = (await import('../models/LeadActivity.js')).default;
     const mongoose = (await import('mongoose')).default;
-    
+
     // Determine target user(s)
     let targetUserId = null;
     if (req.user.role === 'Admission') {
@@ -478,72 +369,100 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
     } else {
       return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
     }
-    
-    // Build match query
-    const matchQuery = {
-      createdAt: { $gte: start, $lt: end }
-    };
-    
+
+    // --- Pipeline snapshot (Lead collection) ---
+    const leadMatch = { createdAt: { $gte: start, $lt: end } };
     if (targetUserId) {
-      matchQuery.assignedTo = mongoose.Types.ObjectId.createFromHexString(targetUserId);
+      leadMatch.assignedTo = mongoose.Types.ObjectId.createFromHexString(targetUserId);
     } else {
-      // Get all admission users
       const admissionUsers = await User.find({ role: 'Admission' }).select('_id');
-      matchQuery.assignedTo = { $in: admissionUsers.map(u => u._id) };
+      leadMatch.assignedTo = { $in: admissionUsers.map(u => u._id) };
     }
-    
-    // Fetch all leads matching criteria
-    const leads = await Lead.find(matchQuery).select('status followUps assignedTo');
-    
-    // Calculate metrics
+    const leads = await Lead.find(leadMatch).select('status assignedTo');
+
     const totalAssignedLeads = leads.length;
     const remainingNewLeads = leads.filter(l => l.status === 'Assigned').length;
-    const firstTimeCalls = leads.filter(l => (l.followUps?.length || 0) === 1).length;
-    const followUpCalls = leads.filter(l => (l.followUps?.length || 0) >= 2).length;
-    const admitted = leads.filter(l => l.status === 'Admitted').length;
-    const notInterested = leads.filter(l => ['Not Interested', 'Not Admitted'].includes(l.status)).length;
-    
-    // If all team members, also return per-user breakdown
-    let perUserStats = null;
-    if (!targetUserId) {
-      const userMap = new Map();
-      leads.forEach(lead => {
-        const key = String(lead.assignedTo);
-        if (!userMap.has(key)) {
-          userMap.set(key, { 
-            totalAssignedLeads: 0, 
-            remainingNewLeads: 0, 
-            firstTimeCalls: 0, 
-            followUpCalls: 0, 
-            admitted: 0, 
-            notInterested: 0 
-          });
-        }
-        const stats = userMap.get(key);
-        stats.totalAssignedLeads++;
-        if (lead.status === 'Assigned') stats.remainingNewLeads++;
-        if ((lead.followUps?.length || 0) === 1) stats.firstTimeCalls++;
-        if ((lead.followUps?.length || 0) >= 2) stats.followUpCalls++;
-        if (lead.status === 'Admitted') stats.admitted++;
-        if (['Not Interested', 'Not Admitted'].includes(lead.status)) stats.notInterested++;
-      });
-      
-      // Get user names
-      const userIds = Array.from(userMap.keys());
-      const users = await User.find({ _id: { $in: userIds } }).select('name');
-      const usersById = {};
-      users.forEach(u => { usersById[String(u._id)] = u.name; });
-      
-      perUserStats = [];
-      for (const [key, stats] of userMap.entries()) {
-        perUserStats.push({
-          userId: key,
-          userName: usersById[key] || 'Unknown',
-          ...stats
-        });
-      }
+
+    // --- Call-activity metrics (LeadActivity collection), same source as /admission-metrics ---
+    const activityMatch = { actionDate: { $gte: start, $lt: end } };
+    if (targetUserId) {
+      activityMatch.advisor = mongoose.Types.ObjectId.createFromHexString(targetUserId);
     }
-    
+
+    const [counselingAgg, followUpAgg, admittedAgg, notAdmittedAgg] = await Promise.all([
+      LeadActivity.aggregate([{ $match: { ...activityMatch, activityType: 'counseling' } }, { $group: { _id: '$advisor', count: { $sum: 1 } } }]),
+      LeadActivity.aggregate([{ $match: { ...activityMatch, activityType: 'follow_up' } }, { $group: { _id: '$advisor', count: { $sum: 1 } } }]),
+      LeadActivity.aggregate([{ $match: { ...activityMatch, activityType: 'admitted' } }, { $group: { _id: '$advisor', count: { $sum: 1 } } }]),
+      LeadActivity.aggregate([{ $match: { ...activityMatch, activityType: { $in: ['not_admitted', 'not_interested'] } } }, { $group: { _id: '$advisor', count: { $sum: 1 } } }]),
+    ]);
+
+    const activityMap = new Map();
+    const bump = (agg, field) => agg.forEach(r => {
+      const key = String(r._id || 'unassigned');
+      const existing = activityMap.get(key) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, notInterested: 0 };
+      existing[field] = r.count;
+      activityMap.set(key, existing);
+    });
+    bump(counselingAgg, 'firstTimeCalls');
+    bump(followUpAgg, 'followUpCalls');
+    bump(admittedAgg, 'admitted');
+    bump(notAdmittedAgg, 'notInterested');
+
+    if (targetUserId) {
+      const a = activityMap.get(String(targetUserId)) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, notInterested: 0 };
+      return res.json({
+        range: { from: from || null, to: to || null },
+        totalAssignedLeads,
+        remainingNewLeads,
+        firstTimeCalls: a.firstTimeCalls,
+        followUpCalls: a.followUpCalls,
+        admitted: a.admitted,
+        notInterested: a.notInterested,
+        perUserStats: null
+      });
+    }
+
+    // Team-wide totals = sum across all advisors' activity in the period
+    let firstTimeCalls = 0, followUpCalls = 0, admitted = 0, notInterested = 0;
+    for (const a of activityMap.values()) {
+      firstTimeCalls += a.firstTimeCalls;
+      followUpCalls += a.followUpCalls;
+      admitted += a.admitted;
+      notInterested += a.notInterested;
+    }
+
+    // Per-user breakdown: merge lead-based pipeline counts with activity-based call counts
+    const leadStatsByUser = new Map();
+    leads.forEach(lead => {
+      const key = String(lead.assignedTo);
+      const s = leadStatsByUser.get(key) || { totalAssignedLeads: 0, remainingNewLeads: 0 };
+      s.totalAssignedLeads++;
+      if (lead.status === 'Assigned') s.remainingNewLeads++;
+      leadStatsByUser.set(key, s);
+    });
+
+    const allUserIds = new Set([...leadStatsByUser.keys(), ...activityMap.keys()]);
+    allUserIds.delete('unassigned');
+    const users = await User.find({ _id: { $in: Array.from(allUserIds) } }).select('name');
+    const usersById = {};
+    users.forEach(u => { usersById[String(u._id)] = u.name; });
+
+    const perUserStats = [];
+    for (const key of allUserIds) {
+      const leadStats = leadStatsByUser.get(key) || { totalAssignedLeads: 0, remainingNewLeads: 0 };
+      const activityStats = activityMap.get(key) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, notInterested: 0 };
+      perUserStats.push({
+        userId: key,
+        userName: usersById[key] || 'Unknown',
+        totalAssignedLeads: leadStats.totalAssignedLeads,
+        remainingNewLeads: leadStats.remainingNewLeads,
+        firstTimeCalls: activityStats.firstTimeCalls,
+        followUpCalls: activityStats.followUpCalls,
+        admitted: activityStats.admitted,
+        notInterested: activityStats.notInterested
+      });
+    }
+
     return res.json({
       range: { from: from || null, to: to || null },
       totalAssignedLeads,
