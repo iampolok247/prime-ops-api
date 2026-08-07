@@ -139,6 +139,7 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     }
 
     const LeadActivity = (await import('../models/LeadActivity.js')).default;
+    const Lead = (await import('../models/Lead.js')).default;
     const mongoose = (await import('mongoose')).default;
 
     // Convert targetUserId to ObjectId if present
@@ -147,98 +148,85 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     const baseMatch = { actionDate: { $gte: start, $lt: end } };
     if (targetUserObjectId) baseMatch.advisor = targetUserObjectId;
 
-    console.log('[METRICS-V2] Date range:', { start: start.toISOString(), end: end.toISOString() });
-    console.log('[METRICS-V2] targetUserId:', targetUserObjectId);
-
-    // Query each activity type separately, grouped by advisor
+    // Calls made in the period: New (counseling) and Follow-up, grouped by advisor
     const counselingAgg = await LeadActivity.aggregate([
       { $match: { ...baseMatch, activityType: 'counseling' } },
       { $group: { _id: '$advisor', count: { $sum: 1 } } }
     ]);
-
     const followUpAgg = await LeadActivity.aggregate([
       { $match: { ...baseMatch, activityType: 'follow_up' } },
       { $group: { _id: '$advisor', count: { $sum: 1 } } }
     ]);
 
-    const admittedAgg = await LeadActivity.aggregate([
-      { $match: { ...baseMatch, activityType: 'admitted' } },
-      { $group: { _id: '$advisor', count: { $sum: 1 } } }
-    ]);
-
-    const notAdmittedAgg = await LeadActivity.aggregate([
-      { $match: { ...baseMatch, activityType: { $in: ['not_admitted','not_interested'] } } },
-      { $group: { _id: '$advisor', count: { $sum: 1 } } }
-    ]);
-
-    console.log('[METRICS-V2] Aggregation results:', { 
-      counseling: counselingAgg.length, 
-      followUp: followUpAgg.length, 
-      admitted: admittedAgg.length, 
-      notAdmitted: notAdmittedAgg.length 
-    });
-
-    // Build result map per user id
     const map = new Map();
-    
-    // Initialize all advisors from counseling agg
-    counselingAgg.forEach(r => map.set(String(r._id || 'unassigned'), { 
-      counselingCount: r.count, 
-      followUpCount: 0, 
-      admittedCount: 0, 
-      notAdmittedCount: 0 
-    }));
-    
-    // Add follow-up counts
+    counselingAgg.forEach(r => map.set(String(r._id || 'unassigned'), { counselingCount: r.count, followUpCount: 0 }));
     followUpAgg.forEach(r => {
       const key = String(r._id || 'unassigned');
-      const existing = map.get(key) || { counselingCount: 0, followUpCount: 0, admittedCount: 0, notAdmittedCount: 0 };
+      const existing = map.get(key) || { counselingCount: 0, followUpCount: 0 };
       existing.followUpCount = r.count;
       map.set(key, existing);
     });
-    
-    // Add admitted counts
-    admittedAgg.forEach(r => {
-      const key = String(r._id || 'unassigned');
-      const existing = map.get(key) || { counselingCount: 0, followUpCount: 0, admittedCount: 0, notAdmittedCount: 0 };
-      existing.admittedCount = r.count;
-      map.set(key, existing);
-    });
-    
-    // Add not admitted counts
-    notAdmittedAgg.forEach(r => {
-      const key = String(r._id || 'unassigned');
-      const existing = map.get(key) || { counselingCount: 0, followUpCount: 0, admittedCount: 0, notAdmittedCount: 0 };
-      existing.notAdmittedCount = r.count;
-      map.set(key, existing);
-    });
+
+    // Outcome breakdown: for every DISTINCT lead called (counseling or follow-up) in this
+    // period, classify it by its CURRENT status/priority into exactly one bucket —
+    // Admitted, Interested, or Not Interested. This is a partition of the leads behind
+    // the call counts above, not a separate independent activity count.
+    const calledLeadsAgg = await LeadActivity.aggregate([
+      { $match: { ...baseMatch, activityType: { $in: ['counseling', 'follow_up'] } } },
+      { $group: { _id: { advisor: '$advisor', lead: '$lead' } } }
+    ]);
+    const leadIds = [...new Set(calledLeadsAgg.map(r => String(r._id.lead)))];
+    const calledLeads = await Lead.find({ _id: { $in: leadIds } }).select('status priority');
+    const leadById = new Map(calledLeads.map(l => [String(l._id), l]));
+
+    const outcomeByAdvisor = new Map();
+    for (const r of calledLeadsAgg) {
+      const advisorKey = String(r._id.advisor || 'unassigned');
+      const lead = leadById.get(String(r._id.lead));
+      if (!lead) continue;
+      const bucket = outcomeByAdvisor.get(advisorKey) || { admittedCount: 0, interestedCount: 0, notAdmittedCount: 0 };
+      if (lead.status === 'Admitted') bucket.admittedCount++;
+      else if (lead.priority === 'Not Interested' || lead.status === 'Not Interested' || lead.status === 'Not Admitted') bucket.notAdmittedCount++;
+      else bucket.interestedCount++;
+      outcomeByAdvisor.set(advisorKey, bucket);
+    }
+
+    for (const [key, val] of map.entries()) {
+      const o = outcomeByAdvisor.get(key) || { admittedCount: 0, interestedCount: 0, notAdmittedCount: 0 };
+      Object.assign(val, o);
+    }
+    // Advisors who only have outcome data (shouldn't normally happen, but stay safe)
+    for (const [key, o] of outcomeByAdvisor.entries()) {
+      if (!map.has(key)) map.set(key, { counselingCount: 0, followUpCount: 0, ...o });
+    }
 
     // If targetUserId specified, return single object
     if (targetUserId) {
       const key = String(targetUserId);
-      const data = map.get(key) || { counselingCount: 0, followUpCount: 0, admittedCount: 0, notAdmittedCount: 0 };
-      // Calculate total calls = new calls + follow-up calls + admitted + not interested
-      // Every interaction (call) results in one of these outcomes, so we sum all activities
-      data.totalCalls = (data.counselingCount || 0) + (data.followUpCount || 0) + (data.admittedCount || 0) + (data.notAdmittedCount || 0);
-      
+      const data = map.get(key) || { counselingCount: 0, followUpCount: 0, admittedCount: 0, interestedCount: 0, notAdmittedCount: 0 };
+      // Total calls = New Calls + Follow-up Calls only (Admitted/Interested/Not Interested
+      // are outcomes of those same calls, not additional call types)
+      data.totalCalls = (data.counselingCount || 0) + (data.followUpCount || 0);
+
       if (format === 'csv' && (req.user.role === 'Admin' || req.user.role === 'SuperAdmin')) {
         // return CSV single row
         const rows = [
-          'userId,newCalls,followUpCalls,totalCalls,admitted,notAdmitted',
-          `${key},${data.counselingCount},${data.followUpCount},${data.totalCalls},${data.admittedCount},${data.notAdmittedCount}`
+          'userId,newCalls,followUpCalls,totalCalls,admitted,interested,notInterested',
+          `${key},${data.counselingCount},${data.followUpCount},${data.totalCalls},${data.admittedCount},${data.interestedCount},${data.notAdmittedCount}`
         ];
         res.setHeader('Content-Type', 'text/csv');
         res.setHeader('Content-Disposition', `attachment; filename="admission-metrics-${key}.csv"`);
         return res.send(rows.join('\n'));
       }
-      return res.json({ 
-        userId: key, 
+      return res.json({
+        userId: key,
         counselingCount: data.counselingCount,
         followUpCount: data.followUpCount,
         totalCalls: data.totalCalls,
         admittedCount: data.admittedCount,
+        interestedCount: data.interestedCount,
         notAdmittedCount: data.notAdmittedCount,
-        range: { from: from || null, to: to || null } 
+        range: { from: from || null, to: to || null }
       });
     }
 
@@ -251,31 +239,31 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
     const results = [];
     for (const [key, val] of map.entries()) {
       if (key === 'unassigned') continue;
-      // Calculate total calls = all call activities (new + follow-up + admitted + not interested)
-      const totalCalls = (val.counselingCount || 0) + (val.followUpCount || 0) + (val.admittedCount || 0) + (val.notAdmittedCount || 0);
-      results.push({ 
-        userId: key, 
-        userName: usersById[key]?.name || null, 
+      const totalCalls = (val.counselingCount || 0) + (val.followUpCount || 0);
+      results.push({
+        userId: key,
+        userName: usersById[key]?.name || null,
         counselingCount: val.counselingCount,
         followUpCount: val.followUpCount,
         totalCalls: totalCalls,
-        admittedCount: val.admittedCount,
-        notAdmittedCount: val.notAdmittedCount
+        admittedCount: val.admittedCount || 0,
+        interestedCount: val.interestedCount || 0,
+        notAdmittedCount: val.notAdmittedCount || 0
       });
     }
 
     if (format === 'csv') {
       // generate CSV
-      const header = ['userId,userName,newCalls,followUpCalls,totalCalls,admitted,notAdmitted'];
-      const rows = results.map(r => `${r.userId},"${(r.userName||'').replace(/"/g,'""')}",${r.counselingCount},${r.followUpCount},${r.totalCalls},${r.admittedCount},${r.notAdmittedCount}`);
+      const header = ['userId,userName,newCalls,followUpCalls,totalCalls,admitted,interested,notInterested'];
+      const rows = results.map(r => `${r.userId},"${(r.userName||'').replace(/"/g,'""')}",${r.counselingCount},${r.followUpCount},${r.totalCalls},${r.admittedCount},${r.interestedCount},${r.notAdmittedCount}`);
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="admission-metrics-${from||'all'}-${to||'all'}.csv"`);
       return res.send([header.join(','), ...rows].join('\n'));
     }
 
-    return res.json({ 
-      range: { from: from || null, to: to || null }, 
-      metrics: results 
+    return res.json({
+      range: { from: from || null, to: to || null },
+      metrics: results
     });
   } catch (e) {
     console.error('Admission metrics error:', e);
@@ -345,9 +333,10 @@ router.get('/admission-metrics-debug', requireAuth, async (req, res) => {
  * Returns:
  * - totalAssignedLeads / remainingNewLeads: pipeline snapshot from the Lead collection
  *   (leads assigned to the user, created within the period; remaining = still "Assigned")
- * - firstTimeCalls / followUpCalls / admitted / notInterested: sourced from LeadActivity
- *   (actionDate within period, grouped by advisor) — same source and definition used by
- *   /admission-metrics, so a team member's own "My Metrics" numbers match what an Admin
+ * - firstTimeCalls / followUpCalls: call counts from LeadActivity (actionDate within period)
+ * - admitted / interested / notInterested: outcome breakdown of the DISTINCT leads called
+ *   in the period, classified by current status/priority — same source and definition used
+ *   by /admission-metrics, so a team member's own "My Metrics" numbers match what an Admin
  *   sees here for that same member and period.
  */
 router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin', 'Accountant', 'HeadOfCreative', 'Admission']), async (req, res) => {
@@ -389,27 +378,45 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
       activityMatch.advisor = mongoose.Types.ObjectId.createFromHexString(targetUserId);
     }
 
-    const [counselingAgg, followUpAgg, admittedAgg, notAdmittedAgg] = await Promise.all([
+    const [counselingAgg, followUpAgg] = await Promise.all([
       LeadActivity.aggregate([{ $match: { ...activityMatch, activityType: 'counseling' } }, { $group: { _id: '$advisor', count: { $sum: 1 } } }]),
       LeadActivity.aggregate([{ $match: { ...activityMatch, activityType: 'follow_up' } }, { $group: { _id: '$advisor', count: { $sum: 1 } } }]),
-      LeadActivity.aggregate([{ $match: { ...activityMatch, activityType: 'admitted' } }, { $group: { _id: '$advisor', count: { $sum: 1 } } }]),
-      LeadActivity.aggregate([{ $match: { ...activityMatch, activityType: { $in: ['not_admitted', 'not_interested'] } } }, { $group: { _id: '$advisor', count: { $sum: 1 } } }]),
     ]);
 
     const activityMap = new Map();
     const bump = (agg, field) => agg.forEach(r => {
       const key = String(r._id || 'unassigned');
-      const existing = activityMap.get(key) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, notInterested: 0 };
+      const existing = activityMap.get(key) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, interested: 0, notInterested: 0 };
       existing[field] = r.count;
       activityMap.set(key, existing);
     });
     bump(counselingAgg, 'firstTimeCalls');
     bump(followUpAgg, 'followUpCalls');
-    bump(admittedAgg, 'admitted');
-    bump(notAdmittedAgg, 'notInterested');
+
+    // Outcome breakdown: for every DISTINCT lead called (counseling or follow-up) in this
+    // period, classify it by its CURRENT status/priority — same logic as /admission-metrics —
+    // so the two pages agree for the same person and period.
+    const calledLeadsAgg = await LeadActivity.aggregate([
+      { $match: { ...activityMatch, activityType: { $in: ['counseling', 'follow_up'] } } },
+      { $group: { _id: { advisor: '$advisor', lead: '$lead' } } }
+    ]);
+    const calledLeadIds = [...new Set(calledLeadsAgg.map(r => String(r._id.lead)))];
+    const calledLeads = await Lead.find({ _id: { $in: calledLeadIds } }).select('status priority');
+    const calledLeadById = new Map(calledLeads.map(l => [String(l._id), l]));
+
+    for (const r of calledLeadsAgg) {
+      const advisorKey = String(r._id.advisor || 'unassigned');
+      const lead = calledLeadById.get(String(r._id.lead));
+      if (!lead) continue;
+      const bucket = activityMap.get(advisorKey) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, interested: 0, notInterested: 0 };
+      if (lead.status === 'Admitted') bucket.admitted++;
+      else if (lead.priority === 'Not Interested' || lead.status === 'Not Interested' || lead.status === 'Not Admitted') bucket.notInterested++;
+      else bucket.interested++;
+      activityMap.set(advisorKey, bucket);
+    }
 
     if (targetUserId) {
-      const a = activityMap.get(String(targetUserId)) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, notInterested: 0 };
+      const a = activityMap.get(String(targetUserId)) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, interested: 0, notInterested: 0 };
       return res.json({
         range: { from: from || null, to: to || null },
         totalAssignedLeads,
@@ -417,17 +424,19 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
         firstTimeCalls: a.firstTimeCalls,
         followUpCalls: a.followUpCalls,
         admitted: a.admitted,
+        interested: a.interested,
         notInterested: a.notInterested,
         perUserStats: null
       });
     }
 
     // Team-wide totals = sum across all advisors' activity in the period
-    let firstTimeCalls = 0, followUpCalls = 0, admitted = 0, notInterested = 0;
+    let firstTimeCalls = 0, followUpCalls = 0, admitted = 0, interested = 0, notInterested = 0;
     for (const a of activityMap.values()) {
       firstTimeCalls += a.firstTimeCalls;
       followUpCalls += a.followUpCalls;
       admitted += a.admitted;
+      interested += a.interested;
       notInterested += a.notInterested;
     }
 
@@ -450,7 +459,7 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
     const perUserStats = [];
     for (const key of allUserIds) {
       const leadStats = leadStatsByUser.get(key) || { totalAssignedLeads: 0, remainingNewLeads: 0 };
-      const activityStats = activityMap.get(key) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, notInterested: 0 };
+      const activityStats = activityMap.get(key) || { firstTimeCalls: 0, followUpCalls: 0, admitted: 0, interested: 0, notInterested: 0 };
       perUserStats.push({
         userId: key,
         userName: usersById[key] || 'Unknown',
@@ -459,6 +468,7 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
         firstTimeCalls: activityStats.firstTimeCalls,
         followUpCalls: activityStats.followUpCalls,
         admitted: activityStats.admitted,
+        interested: activityStats.interested,
         notInterested: activityStats.notInterested
       });
     }
@@ -470,6 +480,7 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
       firstTimeCalls,
       followUpCalls,
       admitted,
+      interested,
       notInterested,
       perUserStats
     });
