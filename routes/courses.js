@@ -7,8 +7,9 @@ import { logActivity } from './activities.js';
 const router = express.Router();
 
 const genCourseId = async () => {
-  const count = await Course.countDocuments({});
-  const n = (count + 1).toString().padStart(4, '0');
+  const last = await Course.findOne().sort({ courseId: -1 }).lean();
+  const lastNum = last ? parseInt(last.courseId.split('-')[1], 10) : 0;
+  const n = (lastNum + 1).toString().padStart(4, '0');
   return `CRS-${n}`;
 };
 
@@ -38,33 +39,40 @@ router.get('/debug-names', requireAuth, authorize(['Admin', 'SuperAdmin', 'Digit
 });
 
 // Create (Admin + SuperAdmin)
-router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res) => {
-  const { name, category, duration, regularFee, discountFee, teacher, details } = req.body || {};
-  if (!name) return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Course name required' });
+router.post('/', requireAuth, authorize(['Admin', 'SuperAdmin']), async (req, res, next) => {
+  try {
+    const { name, category, duration, regularFee, discountFee, teacher, details } = req.body || {};
+    if (!name) return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Course name required' });
 
-  const course = await Course.create({
-    courseId: await genCourseId(),
-    name, category, duration,
-    regularFee: Number(regularFee || 0),
-    discountFee: Number(discountFee || 0),
-    teacher: teacher || '',
-    details: details || '',
-    status: 'Active'
-  });
-  
-  // Log activity
-  await logActivity(
-    req.user.id,
-    req.user.name,
-    req.user.email,
-    req.user.role,
-    'CREATE',
-    'Course',
-    name,
-    `Created course: ${name}`
-  );
-  
-  return res.status(201).json({ course });
+    const course = await Course.create({
+      courseId: await genCourseId(),
+      name, category, duration,
+      regularFee: Number(regularFee || 0),
+      discountFee: Number(discountFee || 0),
+      teacher: teacher || '',
+      details: details || '',
+      status: 'Active'
+    });
+
+    // Log activity
+    await logActivity(
+      req.user.id,
+      req.user.name,
+      req.user.email,
+      req.user.role,
+      'CREATE',
+      'Course',
+      name,
+      `Created course: ${name}`
+    );
+
+    return res.status(201).json({ course });
+  } catch (err) {
+    if (err.code === 11000) {
+      return res.status(409).json({ code: 'DUPLICATE_ID', message: 'Course ID collision, please try again' });
+    }
+    return next(err);
+  }
 });
 
 // Update (Admin + SuperAdmin)
