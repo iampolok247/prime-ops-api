@@ -33,10 +33,10 @@ import requisitionsRoutes from "./routes/requisitions.js"; // Requisition system
 import recruitmentDuesRoutes from "./routes/recruitmentDues.js"; // Recruitment due collection
 import manualDuesRoutes from "./routes/manualDues.js"; // Manual due entry for coordinator
 import attendanceRoutes from "./routes/attendance.js"; // OPS Attendance tracking
-import metaLeadsRoutes from "./routes/metaLeads.js";   // Meta Lead Management (new CRM module)
+import seminarRoutes from "./routes/seminars.js";      // Seminar notices on dashboards
+import metaLeadsRoutes from "./routes/metaLeads.js";   // Meta CRM — DM side + Make.com webhook + CAPI
 import cron from "node-cron";
-import { runRoundRobinAssignment } from "./jobs/roundRobin.js";
-import { runFollowUpDueReminders, runStaleFollowUpFlagging } from "./jobs/followUpReminders.js";
+import { runFollowUpDueReminders } from "./jobs/followUpReminders.js";
 
 dotenv.config();
 
@@ -121,7 +121,10 @@ app.use("/api/requisitions", requisitionsRoutes);
 app.use("/api/recruitment-dues", recruitmentDuesRoutes);
 app.use("/api/manual-dues", manualDuesRoutes);
 app.use("/api/attendance", attendanceRoutes);
-app.use("/api/meta-leads", metaLeadsRoutes); // Meta Lead CRM module
+app.use("/api/seminars", seminarRoutes);
+app.use("/api/meta-leads", metaLeadsRoutes); // Meta CRM — DM side + Make.com webhook + CAPI
+// Meta CRM — Admission side: same admission pipeline router, backed by MetaCrmLead
+app.use("/api/meta-crm/admission", (req, res, next) => { req.leadModel = 'MetaCrmLead'; next(); }, admissionRoutes);
 
 // ---------- 404 Handler ----------
 app.use((req, res) => {
@@ -152,22 +155,10 @@ connectDB(process.env.MONGO_URI)
       console.log(`🚀 Accessible at http://31.97.228.226:${PORT}`);
     });
 
-    // Daily 1 PM BST (= 07:00 UTC) round-robin auto-assignment for Meta Leads
-    cron.schedule('0 7 * * *', () => {
-      console.log('[Cron] Triggering 1 PM round-robin assignment…');
-      runRoundRobinAssignment().catch(e => console.error('[Cron] Round-robin failed:', e.message));
-    }, { timezone: 'UTC' });
-
     // Daily 9 AM BST (= 03:00 UTC) — notify counsellors of follow-ups due today
     cron.schedule('0 3 * * *', () => {
       console.log('[Cron] Triggering follow-up due reminders…');
       runFollowUpDueReminders().catch(e => console.error('[Cron] Follow-up reminders failed:', e.message));
-    }, { timezone: 'UTC' });
-
-    // Daily 9:30 AM BST (= 03:30 UTC) — flag stale follow-up leads for DM review
-    cron.schedule('30 3 * * *', () => {
-      console.log('[Cron] Triggering stale follow-up flagging…');
-      runStaleFollowUpFlagging().catch(e => console.error('[Cron] Stale flagging failed:', e.message));
     }, { timezone: 'UTC' });
   })
   .catch((err) => {

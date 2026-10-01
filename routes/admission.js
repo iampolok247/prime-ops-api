@@ -1,10 +1,13 @@
 // api/routes/admission.js
 import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
-import Lead from '../models/Lead.js';
+import BaseLead from '../models/Lead.js';
+import MetaCrmLead from '../models/MetaCrmLead.js';
 import AdmissionFee from '../models/AdmissionFee.js';
 import { logActivity } from './activities.js';
 import { notifyAccountants } from '../utils/notifications.js';
+import { queueCapiStageEvent } from '../utils/metaCapi.js';
+import { ALL_LEAD_REASONS, qualityForReason, DISQUALIFIED_EVENT, NOT_INTERESTED_EVENT } from '../utils/leadQuality.js';
 
 const router = express.Router();
 
@@ -16,12 +19,67 @@ const isAccountant = (u) => u?.role === 'Accountant';
 const isCoordinator = (u) => u?.role === 'Coordinator';
 const isITAdmin = (u) => u?.role === 'ITAdmin';
 
+// ---------- Which lead collection? ----------
+// This router is mounted twice (see server.js):
+//   /api/admission            → regular leads (Lead)
+//   /api/meta-crm/admission   → Meta CRM leads (MetaCrmLead), req.leadModel = 'MetaCrmLead'
+// Pipeline handlers resolve the model per request so both pipelines share one code path.
+const isMeta = (req) => req.leadModel === 'MetaCrmLead';
+const leadModelName = (req) => (isMeta(req) ? 'MetaCrmLead' : 'Lead');
+const LeadFor = (req) => (isMeta(req) ? MetaCrmLead : BaseLead);
+// Meta CRM leads are soft-deleted and must pass DM validation before they count as pipeline leads
+const pipelineScope = (req) => (isMeta(req) ? { isDeleted: false, validationStatus: 'validated' } : {});
+
+// Score fields are DM/Admin-only — never sent to Admission
+const stripScore = (req, obj) => {
+  if (isMeta(req) && isAdmission(req.user)) {
+    delete obj.aiScore; delete obj.aiScoredAt; delete obj.leadTemperature;
+  }
+  return obj;
+};
+
+// Meta CRM: counsellor's structured quality feedback → lead fields + Meta CAPI stage.
+// Returns an error message when the reason is missing/invalid.
+function validateQualityReason(req, status, qualityReason) {
+  if (!isMeta(req) || status !== 'Not Interested') return null;
+  if (!ALL_LEAD_REASONS.includes(qualityReason)) {
+    return 'Select a lead quality reason from the list';
+  }
+  return null;
+}
+async function applyQualityFeedback(req, lead, qualityReason, qualityNote) {
+  const quality = qualityForReason(qualityReason);
+  lead.leadQuality = quality;
+  lead.qualityReason = qualityReason;
+  lead.qualityNote = qualityNote ? String(qualityNote).trim() : '';
+  lead.qualityMarkedBy = req.user.id;
+  lead.qualityMarkedAt = new Date();
+  return quality === 'Bad' ? DISQUALIFIED_EVENT : NOT_INTERESTED_EVENT;
+}
+
+// Reports cover both pipelines (Meta CRM activity counts toward admission metrics)
+async function findAllPipelineLeads(q, select) {
+  const [a, b] = await Promise.all([
+    BaseLead.find(q).select(select || ''),
+    MetaCrmLead.find({ ...q, isDeleted: false, validationStatus: 'validated' }).select(select || '')
+  ]);
+  return [...a, ...b];
+}
+async function countAllPipelineLeads(q) {
+  const [a, b] = await Promise.all([
+    BaseLead.countDocuments(q),
+    MetaCrmLead.countDocuments({ ...q, isDeleted: false, validationStatus: 'validated' })
+  ]);
+  return a + b;
+}
+
 // ---------- Leads (Admission pipeline) ----------
 
 // Get lead counts by status for current user
 router.get('/leads/counts', requireAuth, async (req, res) => {
   try {
-    const q = {};
+    const Lead = LeadFor(req);
+    const q = { ...pipelineScope(req) };
     
     // If Admission user, only their leads
     if (isAdmission(req.user)) {
@@ -47,8 +105,9 @@ router.get('/leads/counts', requireAuth, async (req, res) => {
 
 // List leads for Admission (own) or Admin/SA/Coordinator (all)
 router.get('/leads', requireAuth, async (req, res) => {
+  const Lead = LeadFor(req);
   const { status } = req.query;
-  const q = {};
+  const q = { ...pipelineScope(req) };
   if (status) q.status = status;
 
   if (isAdmission(req.user)) {
@@ -58,6 +117,7 @@ router.get('/leads', requireAuth, async (req, res) => {
   }
 
   const leads = await Lead.find(q).sort({ createdAt: -1 }).populate('assignedTo', 'name email');
+  if (isMeta(req)) return res.json({ leads: leads.map(l => stripScore(req, l.toObject({ flattenMaps: true }))) });
   return res.json({ leads });
 });
 
@@ -72,14 +132,17 @@ async function updateLeadStatusHandler(req, res) {
   console.log('Request body:', req.body);
   console.log('User:', req.user?.name, req.user?.role);
   
-  const { status, notes, courseId, batchId, nextFollowUpDate, priority } = req.body || {};
+  const { status, notes, courseId, batchId, nextFollowUpDate, priority, qualityReason, qualityNote } = req.body || {};
   const allowed = ['Counseling', 'Admitted', 'In Follow Up', 'Not Interested'];
   if (!allowed.includes(status)) {
     console.log('ERROR: Invalid status:', status);
     return res.status(400).json({ code: 'INVALID_STATUS', message: 'Invalid target status' });
   }
+  const qualityErr = validateQualityReason(req, status, qualityReason);
+  if (qualityErr) return res.status(400).json({ code: 'QUALITY_REASON_REQUIRED', message: qualityErr });
 
-  const lead = await Lead.findById(req.params.id);
+  const Lead = LeadFor(req);
+  const lead = await Lead.findOne({ _id: req.params.id, ...pipelineScope(req) });
   if (!lead) {
     console.log('ERROR: Lead not found:', req.params.id);
     return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
@@ -99,6 +162,11 @@ async function updateLeadStatusHandler(req, res) {
     (from === 'Assigned' && status === 'Counseling') ||
     (from === 'Counseling' && ['Admitted', 'In Follow Up', 'Not Interested'].includes(status)) ||
     (from === 'In Follow Up' && ['Admitted', 'Not Interested'].includes(status));
+
+  // Meta CRM: a bad/lost lead can be closed straight from Assigned (e.g. wrong number)
+  if (!ok && isMeta(req) && from === 'Assigned' && status === 'Not Interested') {
+    ok = true;
+  }
 
   // Special case: allow adding an additional follow-up (notes) while already in 'In Follow Up'
   // without requiring a status change. This enables the frontend "Follow-Up Again" flow.
@@ -121,6 +189,7 @@ async function updateLeadStatusHandler(req, res) {
     const LeadActivity = (await import('../models/LeadActivity.js')).default;
     await LeadActivity.create({
       lead: lead._id,
+      leadModel: leadModelName(req),
       advisor: req.user.id,
       activityType: 'counseling',
       actionDate: new Date(),
@@ -154,6 +223,7 @@ async function updateLeadStatusHandler(req, res) {
         if (!alreadyInBatch) {
           batch.admittedStudents.push({
             lead: lead._id,
+            leadModel: leadModelName(req),
             admittedAt: new Date()
           });
           await batch.save();
@@ -165,6 +235,7 @@ async function updateLeadStatusHandler(req, res) {
     const LeadActivity = (await import('../models/LeadActivity.js')).default;
     await LeadActivity.create({
       lead: lead._id,
+      leadModel: leadModelName(req),
       advisor: req.user.id,
       activityType: 'admitted',
       actionDate: new Date(),
@@ -187,6 +258,7 @@ async function updateLeadStatusHandler(req, res) {
       if (isFirstCounseling) {
         await LeadActivity.create({
           lead: lead._id,
+          leadModel: leadModelName(req),
           advisor: req.user.id,
           activityType: 'counseling',
           actionDate: new Date(),
@@ -215,6 +287,7 @@ async function updateLeadStatusHandler(req, res) {
         // Already in Follow-Up, this is a subsequent follow-up - log as follow_up activity for metrics
         await LeadActivity.create({
           lead: lead._id,
+          leadModel: leadModelName(req),
           advisor: req.user.id,
           activityType: 'follow_up',
           actionDate: new Date(),
@@ -253,9 +326,16 @@ async function updateLeadStatusHandler(req, res) {
     }
   }
 
+  let qualityEvent = null;
+  if (status === 'Not Interested' && isMeta(req)) {
+    qualityEvent = await applyQualityFeedback(req, lead, qualityReason, qualityNote ?? notes);
+    lead.followUps = lead.followUps || [];
+    lead.followUps.push({ note: `${lead.leadQuality === 'Bad' ? 'Bad lead' : 'Not Interested'}: ${qualityReason}${notes ? ` — ${String(notes).trim()}` : ''}`, at: new Date(), by: req.user.id });
+  }
+
   if (status === 'Not Interested') {
     // if a reason/notes provided when marking Not Admitted, store it as a follow-up entry
-    if (notes && String(notes).trim().length > 0) {
+    if (!isMeta(req) && notes && String(notes).trim().length > 0) {
       lead.followUps = lead.followUps || [];
       lead.followUps.push({ note: `Not Interested: ${String(notes).trim()}`, at: new Date(), by: req.user.id });
     }
@@ -264,10 +344,11 @@ async function updateLeadStatusHandler(req, res) {
     const LeadActivity = (await import('../models/LeadActivity.js')).default;
     await LeadActivity.create({
       lead: lead._id,
+      leadModel: leadModelName(req),
       advisor: req.user.id,
       activityType: 'not_interested',
       actionDate: new Date(),
-      note: notes || ''
+      note: isMeta(req) ? [qualityReason, notes].filter(Boolean).join(' — ') : (notes || '')
     });
   }
 
@@ -276,6 +357,11 @@ async function updateLeadStatusHandler(req, res) {
 
   // populate follow-up authors
   await Lead.populate(lead, { path: 'followUps.by', select: 'name email' });
+
+  // Meta CRM: queue the stage event for Meta CAPI (DM sends it from the CAPI Tracking page)
+  if (isMeta(req) && from !== status) {
+    await queueCapiStageEvent(lead, qualityEvent || status, req.user.id);
+  }
 
   // Detect if this is a status change or just adding a follow-up note
   const statusChanged = from !== status;
@@ -310,7 +396,7 @@ async function updateLeadStatusHandler(req, res) {
     );
   }
 
-  return res.json({ lead });
+  return res.json({ lead: isMeta(req) ? stripScore(req, lead.toObject({ flattenMaps: true })) : lead });
 }
 
 // Bulk update lead status - MUST be BEFORE /:id routes
@@ -319,7 +405,7 @@ router.post('/leads/bulk-update', requireAuth, async (req, res) => {
   console.log('Request body:', req.body);
   console.log('User:', req.user?.name, req.user?.role);
 
-  const { leadIds, status, notes } = req.body || {};
+  const { leadIds, status, notes, qualityReason, qualityNote } = req.body || {};
   
   if (!Array.isArray(leadIds) || leadIds.length === 0) {
     return res.status(400).json({ code: 'INVALID_INPUT', message: 'leadIds must be a non-empty array' });
@@ -334,9 +420,12 @@ router.post('/leads/bulk-update', requireAuth, async (req, res) => {
   if (!(isAdmission(req.user) || isAdmin(req.user) || isSA(req.user) || isITAdmin(req.user))) {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
   }
+  const qualityErr = validateQualityReason(req, status, qualityReason);
+  if (qualityErr) return res.status(400).json({ code: 'QUALITY_REASON_REQUIRED', message: qualityErr });
 
   try {
-    const leads = await Lead.find({ _id: { $in: leadIds } });
+    const Lead = LeadFor(req);
+    const leads = await Lead.find({ _id: { $in: leadIds }, ...pipelineScope(req) });
     
     if (leads.length === 0) {
       return res.status(404).json({ code: 'NOT_FOUND', message: 'No leads found' });
@@ -355,7 +444,12 @@ router.post('/leads/bulk-update', requireAuth, async (req, res) => {
 
     for (const lead of leads) {
       try {
+        const prevStatus = lead.status;
         lead.status = status;
+        let qualityEvent = null;
+        if (isMeta(req) && status === 'Not Interested') {
+          qualityEvent = await applyQualityFeedback(req, lead, qualityReason, qualityNote ?? notes);
+        }
         
         // Add note as follow-up if provided
         if (notes && String(notes).trim().length > 0) {
@@ -377,6 +471,9 @@ router.post('/leads/bulk-update', requireAuth, async (req, res) => {
 
         await lead.save();
         updatedLeads.push(lead);
+        if (isMeta(req) && (prevStatus !== status || qualityEvent)) {
+          await queueCapiStageEvent(lead, qualityEvent || status, req.user.id);
+        }
 
         // Log activity for each lead
         await logActivity(
@@ -431,7 +528,8 @@ router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
     return res.status(403).json({ code: 'FORBIDDEN', message: 'Only Admission can add follow-ups' });
   }
 
-  const lead = await Lead.findById(req.params.id);
+  const Lead = LeadFor(req);
+  const lead = await Lead.findOne({ _id: req.params.id, ...pipelineScope(req) });
   if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
 
   if (String(lead.assignedTo) !== String(req.user.id)) {
@@ -460,6 +558,7 @@ router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
     const LeadActivity = (await import('../models/LeadActivity.js')).default;
     await LeadActivity.create({
       lead: lead._id,
+      leadModel: leadModelName(req),
       advisor: req.user.id,
       activityType: 'follow_up',
       actionDate: new Date(),
@@ -523,7 +622,7 @@ router.post('/leads/:id/follow-up', requireAuth, async (req, res) => {
   
   await Lead.populate(populated, { path: 'followUps.by', select: 'name email' });
 
-  return res.json({ lead: populated });
+  return res.json({ lead: isMeta(req) ? stripScore(req, populated.toObject({ flattenMaps: true })) : populated });
 });
 
 // ---------- Fees Collection (Admission submit; Accountant approve in Phase 5) ----------
@@ -579,7 +678,8 @@ router.post('/fees', requireAuth, async (req, res) => {
     return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Missing required fields' });
   }
 
-  const lead = await Lead.findById(leadId);
+  const Lead = LeadFor(req);
+  const lead = await Lead.findOne({ _id: leadId, ...pipelineScope(req) });
   if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
 
   if (String(lead.assignedTo) !== String(req.user.id)) {
@@ -593,6 +693,7 @@ router.post('/fees', requireAuth, async (req, res) => {
 
   const row = await AdmissionFee.create({
     lead: lead._id,
+    leadModel: leadModelName(req),
     courseName,
     totalAmount: Number(totalAmount) || 0,
     amount: Number(amount),
@@ -661,6 +762,8 @@ router.get('/follow-up-notifications', requireAuth, async (req, res) => {
       q.nextFollowUpDate = { $lt: today };
     }
 
+    const Lead = LeadFor(req);
+    Object.assign(q, pipelineScope(req));
     const leads = await Lead.find(q)
       .sort({ nextFollowUpDate: 1 })
       .populate('assignedTo', 'name email');
@@ -672,7 +775,7 @@ router.get('/follow-up-notifications', requireAuth, async (req, res) => {
         : null;
 
       return {
-        ...lead.toObject(),
+        ...stripScore(req, lead.toObject({ flattenMaps: true })),
         isOverdue,
         daysUntil
       };
@@ -724,10 +827,10 @@ router.get('/reports', requireAuth, async (req, res) => {
       }
 
       // Get all leads assigned to this user
-      const userLeads = await Lead.find({ 
-        assignedTo: userId,
-        ...dateFilter
-      }).populate('assignedTo', 'name email');
+      const userLeads = [
+        ...await BaseLead.find({ assignedTo: userId, ...dateFilter }).populate('assignedTo', 'name email'),
+        ...await MetaCrmLead.find({ assignedTo: userId, ...dateFilter, isDeleted: false }).select('-aiScore -aiScoredAt -leadTemperature').populate('assignedTo', 'name email')
+      ];
 
       // Count counseling activities from LeadActivity (not from status)
       const LeadActivity = (await import('../models/LeadActivity.js')).default;
@@ -774,10 +877,7 @@ router.get('/reports', requireAuth, async (req, res) => {
 
     const reports = await Promise.all(
       admissionUsers.map(async (user) => {
-        const userLeads = await Lead.find({ 
-          assignedTo: user._id,
-          ...dateFilter
-        });
+        const userLeads = await findAllPipelineLeads({ assignedTo: user._id, ...dateFilter });
 
         // Count counseling activities from LeadActivity
         const LeadActivity = (await import('../models/LeadActivity.js')).default;
@@ -847,7 +947,8 @@ router.post('/leads/:id/undo-admission', requireAuth, async (req, res) => {
       return res.status(403).json({ code: 'FORBIDDEN', message: 'Only Admin/SuperAdmin/ITAdmin can undo admissions' });
     }
 
-    const lead = await Lead.findById(req.params.id);
+    const Lead = LeadFor(req);
+    const lead = await Lead.findOne({ _id: req.params.id, ...pipelineScope(req) });
     if (!lead) {
       return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
     }
@@ -936,11 +1037,11 @@ router.get('/dashboard', requireAuth, async (req, res) => {
     
     // Count leads by status
     const [assigned, counseling, followUp, admitted, notInterested] = await Promise.all([
-      Lead.countDocuments({ ...dateFilter, status: 'Assigned' }),
-      Lead.countDocuments({ ...dateFilter, status: 'Counseling' }),
-      Lead.countDocuments({ ...dateFilter, status: 'Follow-up' }),
-      Lead.countDocuments({ ...dateFilter, status: 'Admitted' }),
-      Lead.countDocuments({ ...dateFilter, status: 'Not Interested' })
+      countAllPipelineLeads({ ...dateFilter, status: 'Assigned' }),
+      countAllPipelineLeads({ ...dateFilter, status: 'Counseling' }),
+      countAllPipelineLeads({ ...dateFilter, status: 'Follow-up' }),
+      countAllPipelineLeads({ ...dateFilter, status: 'Admitted' }),
+      countAllPipelineLeads({ ...dateFilter, status: 'Not Interested' })
     ]);
     
     return res.json({

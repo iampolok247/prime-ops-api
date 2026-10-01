@@ -1,8 +1,10 @@
 import mongoose from 'mongoose';
+import { leadRef, leadModelField } from '../utils/leadRef.js';
 
 const LeadActivitySchema = new mongoose.Schema(
   {
-    lead: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', required: true, index: true },
+    lead: { type: mongoose.Schema.Types.ObjectId, ref: leadRef, required: true, index: true },
+    leadModel: leadModelField, // 'Lead' | 'MetaCrmLead' — missing on legacy docs → 'Lead'
     advisor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     activityType: {
       type: String,

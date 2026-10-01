@@ -2,6 +2,7 @@ import express from 'express';
 import Target from '../models/Target.js';
 import Course from '../models/Course.js';
 import Lead from '../models/Lead.js';
+import MetaCrmLead from '../models/MetaCrmLead.js';
 import AdmissionFee from '../models/AdmissionFee.js';
 import RecruitmentCandidate from '../models/RecruitmentCandidate.js';
 import RecruitmentIncome from '../models/RecruitmentIncome.js';
@@ -180,7 +181,9 @@ router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission', 'Rec
               studentQuery.assignedTo = target.assignedTo._id;
             }
             console.log(`[Targets] AdmissionStudent query for course ${target.course?.name}:`, JSON.stringify(studentQuery));
-            achieved = await Lead.countDocuments(studentQuery);
+            // Admissions from the Meta CRM pipeline count toward targets too
+            achieved = (await Lead.countDocuments(studentQuery)) +
+              (await MetaCrmLead.countDocuments({ ...studentQuery, isDeleted: false }));
             console.log(`[Targets] Found ${achieved} students`);
             break;
 

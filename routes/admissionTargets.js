@@ -74,7 +74,13 @@ router.get('/', requireAuth, authorize(['Admin', 'SuperAdmin', 'Admission']), as
       .populate('setBy', 'name');
 
     // Calculate achievements for each target
-    const Lead = (await import('../models/Lead.js')).default;
+    const BaseLead = (await import('../models/Lead.js')).default;
+    const MetaCrmLead = (await import('../models/MetaCrmLead.js')).default;
+    // Admissions from the Meta CRM pipeline count toward targets too
+    const Lead = {
+      countDocuments: async (q) => (await BaseLead.countDocuments(q)) +
+        (await MetaCrmLead.countDocuments({ ...q, isDeleted: false }))
+    };
     
     const targetsWithAchievement = await Promise.all(
       targets.map(async (target) => {

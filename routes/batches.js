@@ -1,6 +1,7 @@
 import express from 'express';
 import Batch from '../models/Batch.js';
 import Lead from '../models/Lead.js';
+import { findAnyLead } from '../utils/leadRef.js';
 import { requireAuth } from '../middleware/auth.js';
 import { authorize } from '../middleware/authorize.js';
 import { logActivity } from './activities.js';
@@ -192,7 +193,8 @@ router.post('/:id/add-student', requireAuth, authorize(['Admission', 'Admin', 'S
       return res.status(404).json({ code: 'NOT_FOUND', message: 'Batch not found' });
     }
 
-    const lead = await Lead.findById(leadId);
+    // Student may come from the regular pipeline or the Meta CRM pipeline
+    const { lead, leadModel } = await findAnyLead(leadId);
     if (!lead) {
       return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
     }
@@ -212,6 +214,7 @@ router.post('/:id/add-student', requireAuth, authorize(['Admission', 'Admin', 'S
     // Add student to batch
     batch.admittedStudents.push({
       lead: leadId,
+      leadModel,
       admittedAt: new Date()
     });
 

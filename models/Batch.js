@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { leadRef, leadModelField } from '../utils/leadRef.js';
 
 const BatchSchema = new mongoose.Schema(
   {
@@ -23,7 +24,8 @@ const BatchSchema = new mongoose.Schema(
       min: 1 
     },
     admittedStudents: [{
-      lead: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead' },
+      lead: { type: mongoose.Schema.Types.ObjectId, ref: leadRef },
+      leadModel: leadModelField, // 'Lead' | 'MetaCrmLead' — missing on legacy docs → 'Lead'
       admittedAt: { type: Date, default: Date.now }
     }],
     status: {

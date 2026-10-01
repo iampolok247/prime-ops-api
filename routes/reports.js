@@ -12,6 +12,18 @@ import DMExpense from '../models/DMExpense.js';
 
 const router = Router();
 
+// Called leads can live in either pipeline (regular Lead or Meta CRM lead) —
+// LeadActivity rows from both count toward admission metrics.
+async function findLeadsByIdsAcross(ids, select) {
+  const Lead = (await import('../models/Lead.js')).default;
+  const MetaCrmLead = (await import('../models/MetaCrmLead.js')).default;
+  const [a, b] = await Promise.all([
+    Lead.find({ _id: { $in: ids } }).select(select),
+    MetaCrmLead.find({ _id: { $in: ids } }).select(select)
+  ]);
+  return [...a, ...b];
+}
+
 // helpers
 function parseRange(from, to) {
   const today = new Date();
@@ -176,7 +188,7 @@ router.get('/admission-metrics', requireAuth, async (req, res) => {
       { $group: { _id: { advisor: '$advisor', lead: '$lead' } } }
     ]);
     const leadIds = [...new Set(calledLeadsAgg.map(r => String(r._id.lead)))];
-    const calledLeads = await Lead.find({ _id: { $in: leadIds } }).select('status priority');
+    const calledLeads = await findLeadsByIdsAcross(leadIds, 'status priority');
     const leadById = new Map(calledLeads.map(l => [String(l._id), l]));
 
     const outcomeByAdvisor = new Map();
@@ -367,7 +379,11 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
       const admissionUsers = await User.find({ role: 'Admission' }).select('_id');
       leadMatch.assignedTo = { $in: admissionUsers.map(u => u._id) };
     }
-    const leads = await Lead.find(leadMatch).select('status assignedTo');
+    const MetaCrmLead = (await import('../models/MetaCrmLead.js')).default;
+    const leads = [
+      ...await Lead.find(leadMatch).select('status assignedTo'),
+      ...await MetaCrmLead.find({ ...leadMatch, isDeleted: false, validationStatus: 'validated' }).select('status assignedTo')
+    ];
 
     const totalAssignedLeads = leads.length;
     const remainingNewLeads = leads.filter(l => l.status === 'Assigned').length;
@@ -401,7 +417,7 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
       { $group: { _id: { advisor: '$advisor', lead: '$lead' } } }
     ]);
     const calledLeadIds = [...new Set(calledLeadsAgg.map(r => String(r._id.lead)))];
-    const calledLeads = await Lead.find({ _id: { $in: calledLeadIds } }).select('status priority');
+    const calledLeads = await findLeadsByIdsAcross(calledLeadIds, 'status priority');
     const calledLeadById = new Map(calledLeads.map(l => [String(l._id), l]));
 
     for (const r of calledLeadsAgg) {
@@ -492,7 +508,7 @@ router.get('/admission-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
 
 /**
  * GET /api/reports/meta-lead-team-stats?from=YYYY-MM-DD&to=YYYY-MM-DD&userId=...
- * Same shape as admission-team-stats but for MetaLead (the Meta/Facebook lead CRM).
+ * Same shape as admission-team-stats but for the Meta CRM pipeline (MetaCrmLead).
  * Returns: totalAssigned, hot/warm/cold counts, admitted, notInterested,
  * conversionRate, perUserStats (when no specific userId given).
  */
@@ -501,7 +517,7 @@ router.get('/meta-lead-team-stats', requireAuth, authorize(['SuperAdmin', 'Admin
     const { from, to, userId } = req.query;
     const { start, end } = parseRange(from, to);
 
-    const MetaLead = (await import('../models/MetaLead.js')).default;
+    const MetaLead = (await import('../models/MetaCrmLead.js')).default;
     const User     = (await import('../models/User.js')).default;
     const mongoose  = (await import('mongoose')).default;
 

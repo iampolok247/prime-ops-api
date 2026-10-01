@@ -1,9 +1,11 @@
 // api/models/AdmissionFee.js
 import mongoose from 'mongoose';
+import { leadRef, leadModelField } from '../utils/leadRef.js';
 
 const AdmissionFeeSchema = new mongoose.Schema(
   {
-    lead: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', required: true, index: true },
+    lead: { type: mongoose.Schema.Types.ObjectId, ref: leadRef, required: true, index: true },
+    leadModel: leadModelField, // 'Lead' | 'MetaCrmLead' — missing on legacy docs → 'Lead'
     courseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Course', index: true },
     courseName: { type: String, required: true },
     totalAmount: { type: Number, default: 0 },

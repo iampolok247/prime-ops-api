@@ -1,9 +1,11 @@
 import mongoose from 'mongoose';
+import { leadRef, leadModelField } from '../utils/leadRef.js';
 
 const DueFeesFollowUpSchema = new mongoose.Schema(
   {
     admissionFee: { type: mongoose.Schema.Types.ObjectId, ref: 'AdmissionFee', required: true, index: true },
-    lead: { type: mongoose.Schema.Types.ObjectId, ref: 'Lead', required: true, index: true },
+    lead: { type: mongoose.Schema.Types.ObjectId, ref: leadRef, required: true, index: true },
+    leadModel: leadModelField, // 'Lead' | 'MetaCrmLead' — missing on legacy docs → 'Lead'
     coordinator: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     followUpType: {
       type: String,

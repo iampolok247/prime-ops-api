@@ -1,122 +1,51 @@
+// Meta CRM — DM side (Meta Leads Center) + Make.com webhook + Meta CAPI queue.
+//
+// Flow mirrors Leads Center → Admission Pipeline:
+//   Make.com webhook → MetaCrmLead (validationStatus: pending)
+//   DM validates / rejects → DM assigns to an Admission member
+//   Admission works the lead in the Meta Pipeline (routes/admission.js mounted
+//   at /api/meta-crm/admission) — counseling, follow-ups, fees, admission.
+//
+// The webhook URL (/api/meta-leads/webhook) is unchanged so Make.com needs no edits.
 import express          from 'express';
 import mongoose         from 'mongoose';
-import { timingSafeEqual, createHmac } from 'crypto';
+import { timingSafeEqual } from 'crypto';
 
-import MetaLead         from '../models/MetaLead.js';
+import MetaCrmLead      from '../models/MetaCrmLead.js';
 import User             from '../models/User.js';
+import Course           from '../models/Course.js';
+import CapiEventLog     from '../models/CapiEventLog.js';
 import { requireAuth }  from '../middleware/auth.js';
 import { authorize }    from '../middleware/authorize.js';
 import { scoreLeadAsync } from '../utils/aiScoring.js';
-import { sendMetaCapiEvent, STATUS_EVENT_MAP } from '../utils/metaCapi.js';
-import CapiEventLog from '../models/CapiEventLog.js';
-import { runRoundRobinAssignment } from '../jobs/roundRobin.js';
+import { sendMetaCapiEvent, queueCapiStageEvent, LEAD_RECEIVED_EVENT } from '../utils/metaCapi.js';
+import { logActivity }  from './activities.js';
+import { BAD_LEAD_REASONS, LOST_LEAD_REASONS, DISQUALIFIED_EVENT } from '../utils/leadQuality.js';
 
 const router = express.Router();
 
-// ── Routing log — in-memory, last 50 auto-assignments ────────────────────────
-const routingLog = [];
-function logRouting(entry) {
-  routingLog.unshift({ ...entry, at: new Date() });
-  if (routingLog.length > 50) routingLog.pop();
-}
-
-// ── SSE clients — push instant updates to open browser tabs ─────────────────
-// Map<userId, Set<res>> — one user may have multiple tabs open
-const sseClients = new Map();
-
-function addClient(userId, res) {
-  if (!sseClients.has(userId)) sseClients.set(userId, new Set());
-  sseClients.get(userId).add(res);
-}
-
-function removeClient(userId, res) {
-  const set = sseClients.get(userId);
-  if (!set) return;
-  set.delete(res);
-  if (set.size === 0) sseClients.delete(userId);
-}
-
-// Push to ALL connected users (admin broadcast)
-function pushLeadEvent(payload) {
-  const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  sseClients.forEach(set => {
-    set.forEach(res => { try { res.write(msg); } catch { /* dead connection */ } });
-  });
-}
-
-// Push only to a specific user (counsellor notification)
-function pushToUser(userId, payload) {
-  const set = sseClients.get(String(userId));
-  if (!set) return;
-  const msg = `data: ${JSON.stringify(payload)}\n\n`;
-  set.forEach(res => { try { res.write(msg); } catch { /* dead connection */ } });
-}
-
-// GET /api/meta-leads/events — browser connects here, stays open
-// EventSource can't set headers so accept token via query param as fallback
-router.get('/events', (req, res, next) => {
-  if (req.query.token && !req.headers.authorization) {
-    req.headers.authorization = `Bearer ${req.query.token}`;
-  }
-  next();
-}, requireAuth, (req, res) => {
-  res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' });
-  res.flushHeaders();
-  res.write(': connected\n\n');
-
-  const userId = String(req.user.id);
-  addClient(userId, res);
-
-  // Keepalive every 25s — prevents proxies/routers from closing idle connections
-  const keepAlive = setInterval(() => {
-    try { res.write(': keepalive\n\n'); } catch { clearInterval(keepAlive); removeClient(userId, res); }
-  }, 25000);
-
-  req.on('close', () => { removeClient(userId, res); clearInterval(keepAlive); });
-});
-
 // ── Roles ────────────────────────────────────────────────────────────────────
-const DM_ROLES      = ['DigitalMarketing'];
-const MANAGE_ROLES  = ['DigitalMarketing', 'Admin', 'SuperAdmin', 'ITAdmin'];
-const VIEW_ROLES    = ['DigitalMarketing', 'Admin', 'SuperAdmin', 'ITAdmin', 'Admission', 'HeadOfCreative'];
-const ADMIN_ROLES   = ['Admin', 'SuperAdmin', 'ITAdmin'];
+const MANAGE_ROLES = ['DigitalMarketing', 'Admin', 'SuperAdmin'];                 // validate / assign / edit
+const VIEW_ROLES   = ['DigitalMarketing', 'Admin', 'SuperAdmin', 'ITAdmin', 'HeadOfCreative'];
+const ADMIN_ROLES  = ['Admin', 'SuperAdmin'];
 
-// ── Score field stripping (Admission must NEVER see score) ───────────────────
-// aiReasoning is intentionally NOT in this list — counsellors see the
-// qualitative "why" so they can prep for the call, but never the raw
-// score or Hot/Warm/Cold label (avoids biasing how hard they try).
-const SCORE_FIELDS = ['aiScore', 'aiScoredAt', 'leadTemperature'];
+const POPULATE_USER = 'name email role';
 
-function sanitize(leadDoc, role) {
-  const obj = leadDoc.toObject ? leadDoc.toObject({ flattenMaps: true }) : { ...leadDoc };
-  if (role === 'Admission') {
-    SCORE_FIELDS.forEach(f => delete obj[f]);
-  }
-  return obj;
-}
-
-function sanitizeMany(leads, role) {
-  return leads.map(l => sanitize(l, role));
-}
-
-// ── Counter for ML-YYYY-NNNNN IDs ────────────────────────────────────────────
-const CounterSchema = new mongoose.Schema(
-  { _id: String, seq: { type: Number, default: 0 } }
-);
+// ── Counter for META-YYYY-NNNNN IDs ──────────────────────────────────────────
+const CounterSchema = new mongoose.Schema({ _id: String, seq: { type: Number, default: 0 } });
 const Counter = mongoose.models.Counter || mongoose.model('Counter', CounterSchema);
 
-async function genMetaLeadId() {
+async function genMetaCrmLeadId() {
   const year = new Date().getFullYear();
-  const key  = `meta-lead-${year}`;
   const ctr  = await Counter.findByIdAndUpdate(
-    key,
+    `meta-crm-${year}`,
     { $inc: { seq: 1 } },
     { new: true, upsert: true }
   );
-  return `ML-${year}-${String(ctr.seq).padStart(5, '0')}`;
+  return `META-${year}-${String(ctr.seq).padStart(5, '0')}`;
 }
 
-// ── Duplicate detection ───────────────────────────────────────────────────────
+// ── Duplicate detection: same phone/email for the same course within 180 days
 async function isDuplicate(phone, email, interestedCourse) {
   const since = new Date();
   since.setDate(since.getDate() - 180);
@@ -126,54 +55,13 @@ async function isDuplicate(phone, email, interestedCourse) {
   if (email) orClause.push({ email: email.toLowerCase() });
   if (!orClause.length) return false;
 
-  const dup = await MetaLead.findOne({
-    $and: [
-      { createdAt: { $gte: since } },
-      { interestedCourse: interestedCourse || '' },
-      { $or: orClause },
-      { isDeleted: false }
-    ]
+  const dup = await MetaCrmLead.findOne({
+    createdAt: { $gte: since },
+    interestedCourse: interestedCourse || '',
+    $or: orClause,
+    isDeleted: false
   });
   return !!dup;
-}
-
-// ── Instant lead routing ──────────────────────────────────────────────────────
-// Finds on-duty counsellors and picks the one with fewest leads assigned today.
-// Returns the chosen counsellor or null if none are on duty.
-async function pickOnDutyCounsellor() {
-  const onDuty = await User.find({
-    role:                     'Admission',
-    isActive:                 true,
-    availableForInstantLeads: true,
-    onLeave:                  { $ne: true }
-  }).lean();
-
-  if (onDuty.length === 0) return null;
-  if (onDuty.length === 1) return onDuty[0];
-
-  // Count leads assigned TODAY per counsellor — give next lead to whoever has fewest
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-
-  const counts = await MetaLead.aggregate([
-    { $match: {
-        assignedTo: { $in: onDuty.map(u => u._id) },
-        assignedAt: { $gte: todayStart },
-        isDeleted:  false
-    }},
-    { $group: { _id: '$assignedTo', count: { $sum: 1 } } }
-  ]);
-
-  const countMap = {};
-  counts.forEach(c => { countMap[String(c._id)] = c.count; });
-
-  // Sort by lead count ascending, then by displayOrder for tie-breaking
-  onDuty.sort((a, b) => {
-    const diff = (countMap[String(a._id)] || 0) - (countMap[String(b._id)] || 0);
-    return diff !== 0 ? diff : (a.displayOrder || 0) - (b.displayOrder || 0);
-  });
-
-  return onDuty[0];
 }
 
 // ── Webhook auth ──────────────────────────────────────────────────────────────
@@ -191,9 +79,24 @@ function verifyWebhookSecret(req) {
   }
 }
 
+async function loadPopulated(id) {
+  const lead = await MetaCrmLead.findById(id)
+    .populate('assignedTo', POPULATE_USER)
+    .populate('assignedBy', POPULATE_USER)
+    .populate('validatedBy', 'name email')
+    .populate('admittedToCourse', 'name')
+    .populate('admittedToBatch', 'batchName');
+  if (lead) {
+    await MetaCrmLead.populate(lead, { path: 'followUps.by', select: 'name email' });
+    await MetaCrmLead.populate(lead, { path: 'adminComments.by', select: 'name email' });
+  }
+  return lead;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // POST /api/meta-leads/webhook
 // Make.com sends Meta lead data here. No JWT — secured by WEBHOOK_SECRET header.
+// New leads land in "Pending Validation" for DM review.
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/webhook', async (req, res) => {
   if (!verifyWebhookSecret(req)) {
@@ -203,820 +106,581 @@ router.post('/webhook', async (req, res) => {
   try {
     const body = req.body || {};
 
-    // ── Parse Meta's nested field_data array ──────────────────────────────────
     // Make.com sends Meta leads with field_data: [{name:"full_name", values:["John"]}, ...]
-    // We flatten it into a plain object so the rest of the code works identically
-    // for both raw Make.com payloads and manual test POSTs.
+    // (sometimes as a JSON string). Flatten it into a plain object.
     const flat = {};
     let fieldDataArr = body.field_data;
-    // Make.com sometimes sends field_data as a JSON string instead of a real array
     if (typeof fieldDataArr === 'string') {
       try { fieldDataArr = JSON.parse(fieldDataArr); } catch { fieldDataArr = []; }
     }
     if (Array.isArray(fieldDataArr)) {
       fieldDataArr.forEach(({ name: fieldName, values }) => {
-        if (fieldName && Array.isArray(values) && values.length > 0) {
-          flat[fieldName] = values[0]; // Meta always wraps values in an array
-        }
+        if (fieldName && Array.isArray(values) && values.length > 0) flat[fieldName] = values[0];
       });
+    } else if (fieldDataArr && typeof fieldDataArr === 'object') {
+      Object.assign(flat, fieldDataArr); // field_data serialised as a key:value object
     }
-    // Merge: flat fields from field_data take priority over top-level keys
     const merged = { ...body, ...flat };
 
-    // ── Normalise field names (handles snake_case / camelCase / Meta names) ──
     const name  = merged.full_name || merged.name || merged.fullName || '';
     let   phone = merged.phone_number || merged.phone || merged.phoneNumber || '';
     let   email = (merged.email || '').toLowerCase().trim();
 
-    // ── Fallback: scan all merged keys for anything containing 'phone' or 'email' ──
-    // Catches cases where Make.com maps form fields with custom/different key names
+    // A phone must contain real digits — guards against unmapped Make.com
+    // placeholders (e.g. the literal text "2.data.phone")
+    const isPhone = (v) => typeof v === 'string' && v.replace(/\D/g, '').length >= 6;
+    const isEmail = (v) => typeof v === 'string' && /\S+@\S+\.\S+/.test(v);
+    if (!isPhone(phone)) phone = '';
+    if (!isEmail(email)) email = '';
+
+    // Fallback: any key containing 'phone' / 'email' (custom Make.com mappings)
     if (!phone || !email) {
       for (const [k, v] of Object.entries(merged)) {
         if (!v || typeof v !== 'string') continue;
         const key = k.toLowerCase();
-        if (!phone && key.includes('phone')) phone = v;
-        if (!email && key.includes('email')) email = v.toLowerCase().trim();
+        if (!phone && key.includes('phone') && isPhone(v)) phone = v.trim();
+        if (!email && key.includes('email') && isEmail(v)) email = v.toLowerCase().trim();
       }
     }
 
-    // ── Also scan inside field_data if it was sent as a flat JSON object string ──
-    // Make.com sometimes serialises field_data as a key:value object instead of array
-    if ((!phone || !email) && typeof body.field_data === 'string') {
-      try {
-        const fd = JSON.parse(body.field_data);
-        if (fd && typeof fd === 'object' && !Array.isArray(fd)) {
-          for (const [k, v] of Object.entries(fd)) {
-            if (!v || typeof v !== 'string') continue;
-            const key = k.toLowerCase();
-            if (!phone && key.includes('phone')) phone = v;
-            if (!email && key.includes('email')) email = v.toLowerCase().trim();
-          }
-        }
-      } catch {}
-    }
     const course           = merged.interestedCourse || merged.interested_course || merged.course || '';
-    const metaLeadId       = merged.id || merged.lead_id || merged.leadId || '';
+    const metaLeadId       = String(merged.id || merged.lead_id || merged.leadId || '');
     const metaFormId       = merged.form_id || merged.formId || '';
     const metaAdName       = merged.ad_name || merged.adName || '';
     const metaCampaignName = merged.campaign_name || merged.campaignName || '';
     const metaCampaignId   = merged.campaign_id || merged.campaignId || '';
     const PLATFORM_MAP = { fb: 'Facebook', ig: 'Instagram', wa: 'WhatsApp', messenger: 'Messenger' };
-    const rawPlatform      = merged.platform || '';
-    const platform         = PLATFORM_MAP[rawPlatform.toLowerCase()] || rawPlatform || '';
+    const rawPlatform      = String(merged.platform || '');
+    const platformGuess    = PLATFORM_MAP[rawPlatform.toLowerCase()] || rawPlatform || '';
+    const platform         = ['Facebook', 'Instagram', 'WhatsApp', 'Messenger', 'Other', ''].includes(platformGuess) ? platformGuess : 'Other';
     const isOrganic        = merged.is_organic === true || merged.isOrganic === true;
 
     if (!name && !phone && !email) {
       return res.status(400).json({ code: 'EMPTY_LEAD', message: 'Lead must have at least name, phone, or email' });
     }
 
-    // ── CAMPAIGN FILTER (currently disabled — uncomment the block below to activate) ──────────────
-    // PURPOSE: Only capture leads from campaigns whose name contains the word "course"
-    //          (case-insensitive: matches "Course", "COURSE", "course", etc.).
-    //          Any lead coming from a campaign that does NOT contain "course" in its name
-    //          will be silently skipped (returns 200 SKIPPED, nothing saved to DB).
-    //
-    // EXAMPLES:
-    //   ✅ Captured  → "IELTS Course 2026", "Python COURSE Leads", "course registration"
-    //   ⛔ Skipped   → "Awareness Campaign Q3", "Hiring 2026", "Brand Promotion"
-    //   ✅ Captured  → leads with no campaign name (safe fallback, not filtered out)
-    //
-    // HOW TO ACTIVATE: Remove the /* and */ comment wrappers below.
-    // ─────────────────────────────────────────────────────────────────────────────────────────────
-    /*
-    if (metaCampaignName && !/course/i.test(metaCampaignName)) {
-      return res.status(200).json({ code: 'SKIPPED', message: 'Lead skipped: campaign is not course-related' });
-    }
-    */
-
-    // Dedup by Meta lead ID (fastest check)
     if (metaLeadId) {
-      const existing = await MetaLead.findOne({ metaLeadId, isDeleted: false });
+      const existing = await MetaCrmLead.findOne({ metaLeadId, isDeleted: false });
       if (existing) {
         return res.status(200).json({ code: 'DUPLICATE', message: 'Lead already imported', leadId: existing.leadId });
       }
     }
-
-    // Dedup by phone/email within same course
     if (await isDuplicate(phone, email, course)) {
       return res.status(200).json({ code: 'DUPLICATE', message: 'Duplicate phone/email for this course' });
     }
 
-    // Col 8: store original raw body (including field_data array) for full audit trail
-    const rawQuestionData = body;
-
-    // Collect extra Q&A from Meta form as customFields (any key not in our known set)
+    // Extra Q&A from the Meta form → customFields
     const knownKeys = new Set(['full_name','name','fullName','phone_number','phone','phoneNumber',
       'email','interestedCourse','interested_course','course','id','lead_id','leadId',
       'form_id','formId','ad_name','adName','campaign_id','campaignId',
       'campaign_name','campaignName','platform','is_organic','isOrganic','field_data',
       'created_time','ad_id']);
     const customFields = {};
-    // Pull from flattened fields first (covers Meta custom questions)
     for (const [k, v] of Object.entries(merged)) {
-      if (!knownKeys.has(k) && v != null && typeof v !== 'object') {
-        customFields[k] = String(v);
-      }
+      if (!knownKeys.has(k) && v != null && typeof v !== 'object') customFields[k] = String(v);
     }
 
-    const lead = await MetaLead.create({
-      leadId:           await genMetaLeadId(),
+    const lead = await MetaCrmLead.create({
+      leadId:           await genMetaCrmLeadId(),
       name:             name || 'Unknown',
       phone:            phone || undefined,
       email:            email || undefined,
       interestedCourse: course,
       source:           'Meta Lead',
-      metaLeadId,
+      metaLeadId:       metaLeadId || undefined,
       metaFormId,
       metaAdName,
       metaCampaignName,
       metaCampaignId,
       platform,
       isOrganic,
-      rawQuestionData,
+      rawQuestionData:  body,
       customFields,
-      validationStatus: 'validated',
-      status:           'Pending'
+      validationStatus: 'pending',
+      status:           'Assigned'
     });
 
-    // Fire AI scoring asynchronously — non-blocking
-    scoreLeadAsync(MetaLead, lead._id, lead);
+    scoreLeadAsync(MetaCrmLead, lead._id, lead);          // AI score (async, non-blocking)
+    await queueCapiStageEvent(lead, LEAD_RECEIVED_EVENT); // raw-lead stage for Meta CRM optimisation
 
-    // ── Instant routing — assign to on-duty counsellor if available ───────────
-    const counsellor = await pickOnDutyCounsellor();
-    if (counsellor) {
-      await MetaLead.findByIdAndUpdate(lead._id, {
-        assignedTo:   counsellor._id,
-        assignedAt:   new Date(),
-        autoAssigned: true,
-        status:       'Assigned'
-      });
-      // Log for admin routing log panel
-      logRouting({ leadId: lead.leadId, name: lead.name, counsellor: counsellor.name, phone: lead.phone || '' });
-
-      // Broadcast NEW_LEAD to all admin/DM tabs to refresh the list
-      pushLeadEvent({
-        type:         'NEW_LEAD',
-        leadId:       lead.leadId,
-        name:         lead.name,
-        assignedTo:   String(counsellor._id),
-        counsellor:   counsellor.name,
-        autoAssigned: true
-      });
-      // Push targeted LEAD_ASSIGNED directly to the counsellor's browser
-      pushToUser(String(counsellor._id), {
-        type:    'LEAD_ASSIGNED',
-        leadId:  lead.leadId,
-        name:    lead.name,
-        phone:   lead.phone || '',
-        email:   lead.email || '',
-        course:  lead.interestedCourse || '',
-        link:    '/meta-leads/queue'
-      });
-    } else {
-      // No one on duty — push to admin tabs as unassigned
-      pushLeadEvent({ type: 'NEW_LEAD', leadId: lead.leadId, name: lead.name, autoAssigned: false });
-    }
-
-    return res.status(201).json({
-      ok:          true,
-      leadId:      lead.leadId,
-      autoAssigned: !!counsellor,
-      assignedTo:   counsellor ? counsellor.name : null
-    });
+    return res.status(201).json({ ok: true, leadId: lead.leadId });
   } catch (e) {
-    console.error('[Webhook] Error:', e.message);
+    console.error('[Meta Webhook] Error:', e.message);
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// POST /api/meta-leads
-// Manual lead creation by DM/Admin. Auto-validated (no pending gate needed).
+// POST /api/meta-leads — manual lead by DM (already validated)
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
-    const { name, phone, email, interestedCourse, source, manualScore, customFields } = req.body || {};
-
+    const { name, phone, email, interestedCourse, source, specialFilter, customFields } = req.body || {};
     if (!name) return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'Name is required' });
 
+    if (interestedCourse) {
+      const escaped = interestedCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const course = await Course.findOne({ name: { $regex: `^${escaped}$`, $options: 'i' } });
+      if (!course) return res.status(400).json({ code: 'INVALID_COURSE', message: `Course "${interestedCourse}" does not exist` });
+    }
     if (await isDuplicate(phone, email, interestedCourse)) {
       return res.status(409).json({ code: 'DUPLICATE', message: 'Duplicate phone/email for this course' });
     }
 
-    const lead = await MetaLead.create({
-      leadId:           await genMetaLeadId(),
+    const lead = await MetaCrmLead.create({
+      leadId:           await genMetaCrmLeadId(),
       name,
       phone:            phone || undefined,
       email:            email?.toLowerCase() || undefined,
       interestedCourse: interestedCourse || '',
-      source:           source || 'Manually Generated Lead',
-      manualScore:      manualScore || null,
+      source:           source || 'Meta Lead',
+      specialFilter:    specialFilter || '',
       customFields:     customFields || {},
       validationStatus: 'validated',
       validatedBy:      req.user.id,
       validatedAt:      new Date(),
-      status:           'Pending',
+      status:           'Assigned',
       assignedBy:       req.user.id
     });
 
-    scoreLeadAsync(MetaLead, lead._id, lead);
+    scoreLeadAsync(MetaCrmLead, lead._id, lead);
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role,
+      'CREATE', 'MetaCrmLead', name, `Created Meta lead: ${name} (${lead.leadId})`);
 
-    return res.status(201).json({ ok: true, lead: sanitize(lead, req.user.role) });
+    return res.status(201).json({ lead: await loadPopulated(lead._id) });
   } catch (e) {
-    console.error('[MetaLeads] Create error:', e.message);
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/meta-leads/stats
-// Count by status and validation state. Admission sees only their own counts.
+// GET /api/meta-leads/stats — tab counts for Meta Leads Center
 // ═══════════════════════════════════════════════════════════════════════════════
 router.get('/stats', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
   try {
-    const baseQ = { isDeleted: false };
-    // Aggregate $match does NOT auto-cast strings to ObjectId like find()/countDocuments() do —
-    // must cast explicitly or the aggregate stages below silently match zero documents.
-    if (req.user.role === 'Admission') baseQ.assignedTo = mongoose.Types.ObjectId.createFromHexString(req.user.id);
-
-    const [
-      pending, validated, rejected,
-      statusCounts, tempCounts,
-      followUpOverdue, followUpStuck
-    ] = await Promise.all([
-      MetaLead.countDocuments({ ...baseQ, validationStatus: 'pending' }),
-      MetaLead.countDocuments({ ...baseQ, validationStatus: 'validated', assignedTo: null }),
-      MetaLead.countDocuments({ ...baseQ, validationStatus: 'rejected' }),
-      MetaLead.aggregate([
-        { $match: { ...baseQ } },
+    const base = { isDeleted: false };
+    const validated = { ...base, validationStatus: 'validated' };
+    const [pending, unassigned, rejected, byStatusAgg] = await Promise.all([
+      MetaCrmLead.countDocuments({ ...base, validationStatus: 'pending' }),
+      MetaCrmLead.countDocuments({ ...validated, assignedTo: null }),
+      MetaCrmLead.countDocuments({ ...base, validationStatus: 'rejected' }),
+      MetaCrmLead.aggregate([
+        { $match: { ...validated, assignedTo: { $ne: null } } },
         { $group: { _id: '$status', count: { $sum: 1 } } }
-      ]),
-      MetaLead.aggregate([
-        { $match: { ...baseQ, leadTemperature: { $in: ['Hot', 'Warm', 'Cold'] } } },
-        { $group: { _id: '$leadTemperature', count: { $sum: 1 } } }
-      ]),
-      // #2: overdue follow-ups (next date already passed)
-      MetaLead.countDocuments({ ...baseQ, status: 'In Follow Up', nextFollowUpDate: { $lt: new Date() } }),
-      // #1: "stuck" — 5+ touches, still in follow-up, never converted
-      MetaLead.countDocuments({ ...baseQ, status: 'In Follow Up', $expr: { $gte: [{ $size: { $ifNull: ['$followUps', []] } }, 5] } })
+      ])
     ]);
-
-    const byStatus      = {};
-    const byTemperature = {};
-    statusCounts.forEach(s => { byStatus[s._id]      = s.count; });
-    tempCounts.forEach(t   => { byTemperature[t._id] = t.count; });
-
-    return res.json({
-      pending, validatedUnassigned: validated, rejected, byStatus, byTemperature,
-      followUpOverdue, followUpStuck
-    });
+    const byStatus = {};
+    byStatusAgg.forEach(s => { byStatus[s._id] = s.count; });
+    return res.json({ pending, unassigned, rejected, byStatus });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/meta-leads/courses
-// Unique interestedCourse values for dropdown filters.
+// GET /api/meta-leads/today-assignments — DM: today's assignments by member & course
 // ═══════════════════════════════════════════════════════════════════════════════
-router.get('/courses', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
+router.get('/today-assignments', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
-    const query = { isDeleted: false };
-    if (req.user.role === 'Admission') query.assignedTo = req.user.id;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate() + 1);
 
-    const courses = await MetaLead.distinct('interestedCourse', query);
-    const cleaned = courses
-      .map(c => (typeof c === 'string' ? c.trim() : ''))
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b));
+    const leads = await MetaCrmLead.find({
+      isDeleted: false,
+      assignedAt: { $gte: today, $lt: tomorrow },
+      assignedTo: { $ne: null }
+    }).populate('assignedTo', POPULATE_USER);
 
-    return res.json({ courses: cleaned });
+    const grouped = {};
+    leads.forEach(lead => {
+      const member = lead.assignedTo?.name || 'Unknown';
+      const course = lead.interestedCourse || 'No Course Specified';
+      grouped[member] = grouped[member] || {};
+      grouped[member][course] = (grouped[member][course] || 0) + 1;
+    });
+    return res.json({ grouped, total: leads.length });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/meta-leads
-// DM/Admin: all leads. Admission: only their assigned leads. Score stripped for Admission.
-// Query params: validationStatus, status, temperature, minScore, platform, course, from, to, q, page, limit
+// GET /api/meta-leads?view=pending|unassigned|rejected|<status>
+// DM/Admin list for Meta Leads Center.
 // ═══════════════════════════════════════════════════════════════════════════════
 router.get('/', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
   try {
-    const {
-      validationStatus, status, temperature, minScore,
-      platform, course, from, to,
-      page = 1, limit = 50, q, unassignedOnly, assignedTo,
-      overdueOnly, stuckOnly
-    } = req.query;
+    const { view = 'pending' } = req.query;
+    const q = { isDeleted: false };
+    if (view === 'pending') q.validationStatus = 'pending';
+    else if (view === 'rejected') q.validationStatus = 'rejected';
+    else if (view === 'unassigned') Object.assign(q, { validationStatus: 'validated', assignedTo: null });
+    else Object.assign(q, { validationStatus: 'validated', assignedTo: { $ne: null }, status: view });
 
-    const query = { isDeleted: false };
-
-    // Admission sees only their own leads
-    if (req.user.role === 'Admission') query.assignedTo = req.user.id;
-    // Admin/DM can filter by a specific counsellor
-    else if (assignedTo) query.assignedTo = assignedTo;
-
-    if (validationStatus) query.validationStatus = validationStatus;
-    if (status)           query.status           = status;
-    if (temperature)      query.leadTemperature  = temperature;         // Hot / Warm / Cold
-    if (platform)         query.platform         = platform;
-    if (course) {
-      const courseRe = new RegExp(course.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      query.interestedCourse = courseRe;
-    }
-    if (unassignedOnly === 'true') query.assignedTo = null;
-    if (overdueOnly === 'true') {
-      query.status = 'In Follow Up';
-      query.nextFollowUpDate = { $lt: new Date() };
-    }
-    if (stuckOnly === 'true') {
-      query.status = 'In Follow Up';
-      query.$expr = { $gte: [{ $size: { $ifNull: ['$followUps', []] } }, 5] };
-    }
-
-    // Score filter: only leads with aiScore >= minScore
-    if (minScore) query.aiScore = { $gte: Number(minScore) };
-
-    // Date range on createdAt
-    if (from || to) {
-      query.createdAt = {};
-      if (from) query.createdAt.$gte = new Date(from);
-      if (to)   query.createdAt.$lte = new Date(new Date(to).setHours(23, 59, 59, 999));
-    }
-
-    // Search across name / phone / email / leadId
-    if (q) {
-      const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
-      query.$or = [{ name: re }, { phone: re }, { email: re }, { leadId: re }];
-    }
-
-    const skip  = (Number(page) - 1) * Number(limit);
-    const total = await MetaLead.countDocuments(query);
-
-    const leads = await MetaLead.find(query)
+    const leads = await MetaCrmLead.find(q)
       .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(Number(limit))
-      .populate('assignedTo', 'name email role')
-      .populate('assignedBy', 'name email role')
+      .populate('assignedTo', POPULATE_USER)
+      .populate('assignedBy', POPULATE_USER)
       .populate('validatedBy', 'name email');
-
-    return res.json({
-      leads: sanitizeMany(leads, req.user.role),
-      total,
-      page: Number(page),
-      pages: Math.ceil(total / Number(limit))
-    });
+    await MetaCrmLead.populate(leads, { path: 'followUps.by', select: 'name email' });
+    return res.json({ leads: leads.map(l => l.toObject({ flattenMaps: true })) });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/meta-leads/:id
+// Validation gate — DM approves or rejects pending leads
 // ═══════════════════════════════════════════════════════════════════════════════
-router.get('/:id', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
-  try {
-    const lead = await MetaLead.findOne({ _id: req.params.id, isDeleted: false })
-      .populate('assignedTo',  'name email role')
-      .populate('assignedBy',  'name email role')
-      .populate('validatedBy', 'name email')
-      .populate('followUps.by', 'name email');
-
-    if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
-
-    // Admission can only view their own leads
-    if (req.user.role === 'Admission') {
-      if (!lead.assignedTo || String(lead.assignedTo._id) !== String(req.user.id)) {
-        return res.status(403).json({ code: 'FORBIDDEN', message: 'Access denied' });
-      }
+// Rejecting = marking the lead as junk: needs a reason from the bad-lead list and
+// queues a "Disqualified" stage so Meta learns from it.
+async function applyValidation(lead, action, rejectionReason, user) {
+  lead.validatedBy = user.id;
+  lead.validatedAt = new Date();
+  if (action === 'reject') {
+    lead.validationStatus = 'rejected';
+    lead.rejectionReason  = rejectionReason;
+    lead.status           = 'Archived';
+    lead.leadQuality      = 'Bad';
+    lead.qualityReason    = rejectionReason;
+    lead.qualityMarkedBy  = user.id;
+    lead.qualityMarkedAt  = new Date();
+  } else {
+    lead.validationStatus = 'validated';
+    lead.rejectionReason  = '';
+    if (lead.status === 'Archived') lead.status = 'Assigned';
+    if (lead.leadQuality === 'Bad' && !lead.assignedTo) {
+      lead.leadQuality = null; lead.qualityReason = ''; lead.qualityMarkedBy = undefined; lead.qualityMarkedAt = undefined;
     }
-
-    return res.json({ lead: sanitize(lead, req.user.role) });
-  } catch (e) {
-    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
-});
+  await lead.save();
+  if (action === 'reject') await queueCapiStageEvent(lead, DISQUALIFIED_EVENT, user.id);
+}
+const invalidRejectReason = (action, reason) =>
+  action === 'reject' && !BAD_LEAD_REASONS.includes(reason);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// PATCH /api/meta-leads/:id/validate
-// DM / Admin approves or rejects a pending lead. Scoring is 100% AI — no manual score.
-// ═══════════════════════════════════════════════════════════════════════════════
 router.patch('/:id/validate', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
-    const { action, assignedTo, rejectionReason } = req.body || {};
-
+    const { action, rejectionReason } = req.body || {};
     if (!['validate', 'reject'].includes(action)) {
       return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'action must be "validate" or "reject"' });
     }
-
-    const lead = await MetaLead.findOne({ _id: req.params.id, isDeleted: false });
+    if (invalidRejectReason(action, rejectionReason)) {
+      return res.status(400).json({ code: 'QUALITY_REASON_REQUIRED', message: 'Select a bad-lead reason from the list' });
+    }
+    const lead = await MetaCrmLead.findOne({ _id: req.params.id, isDeleted: false });
     if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
-
-    if (action === 'reject') {
-      lead.validationStatus = 'rejected';
-      lead.rejectionReason  = rejectionReason || '';
-      lead.validatedBy      = req.user.id;
-      lead.validatedAt      = new Date();
-      lead.status           = 'Archived';
-    } else {
-      lead.validationStatus = 'validated';
-      lead.validatedBy      = req.user.id;
-      lead.validatedAt      = new Date();
-
-      // Optional immediate assignment after validation
-      if (assignedTo) {
-        const counsellor = await User.findById(assignedTo);
-        if (!counsellor || counsellor.role !== 'Admission') {
-          return res.status(400).json({ code: 'INVALID_ASSIGNEE', message: 'assignedTo must be an Admission user' });
-        }
-        lead.assignedTo  = counsellor._id;
-        lead.assignedBy  = req.user.id;
-        lead.assignedAt  = new Date();
-        lead.autoAssigned = false;
-        lead.status      = 'Assigned';
-      }
+    if (lead.assignedTo) {
+      return res.status(400).json({ code: 'ALREADY_ASSIGNED', message: 'Assigned leads cannot be re-validated' });
     }
 
-    await lead.save();
+    await applyValidation(lead, action, rejectionReason, req.user);
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'UPDATE', 'MetaCrmLead', lead.name,
+      `${action === 'reject' ? 'Rejected' : 'Validated'} Meta lead: ${lead.name} (${lead.leadId})`);
+    return res.json({ lead: await loadPopulated(lead._id) });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
 
-    const populated = await MetaLead.findById(lead._id)
-      .populate('assignedTo',  'name email role')
-      .populate('validatedBy', 'name email');
-
-    return res.json({ ok: true, lead: sanitize(populated, req.user.role) });
+router.post('/bulk-validate', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
+  try {
+    const { leadIds, action, rejectionReason } = req.body || {};
+    if (!Array.isArray(leadIds) || leadIds.length === 0) {
+      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'leadIds array required' });
+    }
+    if (!['validate', 'reject'].includes(action)) {
+      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'action must be "validate" or "reject"' });
+    }
+    if (invalidRejectReason(action, rejectionReason)) {
+      return res.status(400).json({ code: 'QUALITY_REASON_REQUIRED', message: 'Select a bad-lead reason from the list' });
+    }
+    const leads = await MetaCrmLead.find({ _id: { $in: leadIds }, isDeleted: false, assignedTo: null });
+    for (const lead of leads) await applyValidation(lead, action, rejectionReason, req.user);
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'UPDATE', 'MetaCrmLead', 'Bulk Operation',
+      `Bulk ${action === 'reject' ? 'rejected' : 'validated'} ${leads.length} Meta lead(s)`);
+    return res.json({ ok: true, updated: leads.length, message: `${leads.length} lead(s) ${action === 'reject' ? 'rejected' : 'validated'}` });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PATCH /api/meta-leads/:id/assign
-// Manually assign a validated lead to an Admission counsellor.
+// Assignment — DM assigns validated leads to Admission members
 // ═══════════════════════════════════════════════════════════════════════════════
-router.patch('/:id/assign', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
+async function getAdmissionUser(id) {
+  if (!id || !mongoose.isValidObjectId(id)) return null;
+  const user = await User.findById(id);
+  return user && user.role === 'Admission' ? user : null;
+}
+
+const assignHandler = async (req, res) => {
   try {
-    const { assignedTo } = req.body || {};
+    const user = await getAdmissionUser(req.body?.assignedTo);
+    if (!user) return res.status(400).json({ code: 'INVALID_ASSIGNEE', message: 'Assignee must be Admission member' });
 
-    const lead = await MetaLead.findOne({ _id: req.params.id, isDeleted: false });
+    const lead = await MetaCrmLead.findOne({ _id: req.params.id, isDeleted: false });
     if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
-
     if (lead.validationStatus !== 'validated') {
       return res.status(400).json({ code: 'NOT_VALIDATED', message: 'Lead must be validated before assignment' });
     }
 
-    const counsellor = await User.findById(assignedTo);
-    if (!counsellor || counsellor.role !== 'Admission') {
-      return res.status(400).json({ code: 'INVALID_ASSIGNEE', message: 'assignedTo must be an Admission user' });
-    }
-
-    lead.assignedTo   = counsellor._id;
-    lead.assignedBy   = req.user.id;
-    lead.assignedAt   = new Date();
-    lead.autoAssigned = false;
-    lead.status       = 'Assigned';
+    lead.assignedTo = user._id;
+    lead.assignedBy = lead.assignedBy || req.user.id;
+    lead.assignedAt = new Date();
+    if (!lead.status || lead.status === 'Archived') lead.status = 'Assigned';
     await lead.save();
 
-    const populated = await MetaLead.findById(lead._id)
-      .populate('assignedTo',  'name email role')
-      .populate('assignedBy',  'name email role');
-
-    return res.json({ ok: true, lead: sanitize(populated, req.user.role) });
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'UPDATE', 'MetaCrmLead', lead.name,
+      `Assigned Meta lead ${lead.name} (${lead.leadId}) to ${user.name}`);
+    return res.json({ lead: await loadPopulated(lead._id) });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
-});
+};
+router.post('/:id/assign', requireAuth, authorize(MANAGE_ROLES), assignHandler);
+router.patch('/:id/assign', requireAuth, authorize(MANAGE_ROLES), assignHandler);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// POST /api/meta-leads/bulk-assign
-// Assign multiple validated leads to a single counsellor.
-// ═══════════════════════════════════════════════════════════════════════════════
 router.post('/bulk-assign', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
     const { leadIds, assignedTo } = req.body || {};
-
     if (!Array.isArray(leadIds) || leadIds.length === 0) {
       return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'leadIds array required' });
     }
+    const user = await getAdmissionUser(assignedTo);
+    if (!user) return res.status(400).json({ code: 'INVALID_ASSIGNEE', message: 'Assignee must be Admission member' });
 
-    const counsellor = await User.findById(assignedTo);
-    if (!counsellor || counsellor.role !== 'Admission') {
-      return res.status(400).json({ code: 'INVALID_ASSIGNEE', message: 'assignedTo must be an Admission user' });
-    }
-
-    const result = await MetaLead.updateMany(
-      { _id: { $in: leadIds }, validationStatus: 'validated', isDeleted: false },
-      {
-        $set: {
-          assignedTo:   counsellor._id,
-          assignedBy:   req.user.id,
-          assignedAt:   new Date(),
-          autoAssigned: false,
-          status:       'Assigned'
-        }
-      }
+    // Only validated leads can be assigned; re-assigning keeps the lead's current stage
+    const result = await MetaCrmLead.updateMany(
+      { _id: { $in: leadIds }, isDeleted: false, validationStatus: 'validated' },
+      { $set: { assignedTo: user._id, assignedAt: new Date(), assignedBy: req.user.id } }
     );
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'UPDATE', 'MetaCrmLead', 'Bulk Operation',
+      `Bulk assigned ${result.modifiedCount} Meta lead(s) to ${user.name}`);
 
-    return res.json({ ok: true, assigned: result.modifiedCount });
-  } catch (e) {
-    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PATCH /api/meta-leads/bulk-reschedule  — #3 push multiple follow-ups to a new date
-// Body: { leadIds: [...], nextFollowUpDate } OR { leadIds: [...], pushDays: N }
-// ═══════════════════════════════════════════════════════════════════════════════
-router.patch('/bulk-reschedule', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
-  try {
-    const { leadIds, nextFollowUpDate, pushDays } = req.body || {};
-    if (!Array.isArray(leadIds) || leadIds.length === 0) {
-      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'leadIds array required' });
-    }
-    if (!nextFollowUpDate && !pushDays) {
-      return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'nextFollowUpDate or pushDays required' });
-    }
-
-    const matchQuery = { _id: { $in: leadIds }, isDeleted: false };
-    // Counsellors can only reschedule their own leads
-    if (req.user.role === 'Admission') matchQuery.assignedTo = req.user.id;
-
-    let result;
-    if (nextFollowUpDate) {
-      // Set all selected leads to the same fixed date
-      result = await MetaLead.updateMany(matchQuery, { $set: { nextFollowUpDate: new Date(nextFollowUpDate) } });
-    } else {
-      // Push each lead's existing date forward by N days (or from today if none set)
-      const leads = await MetaLead.find(matchQuery).select('nextFollowUpDate');
-      const ops = leads.map(lead => {
-        const base = lead.nextFollowUpDate ? new Date(lead.nextFollowUpDate) : new Date();
-        base.setDate(base.getDate() + Number(pushDays));
-        return { updateOne: { filter: { _id: lead._id }, update: { $set: { nextFollowUpDate: base } } } };
-      });
-      if (ops.length) await MetaLead.bulkWrite(ops);
-      result = { modifiedCount: ops.length };
-    }
-
-    return res.json({ ok: true, rescheduled: result.modifiedCount });
-  } catch (e) {
-    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PATCH /api/meta-leads/:id/log-touch  — #6 "Mark as called" — logs a touchpoint
-// without changing status or follow-up date. Lightweight alternative to full
-// status update when counsellor just wants to record they made contact.
-// ═══════════════════════════════════════════════════════════════════════════════
-router.patch('/:id/log-touch', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
-  try {
-    const { note, outcome } = req.body || {}; // outcome: 'Called' | 'No Show' | 'No Answer'
-    const lead = await MetaLead.findOne({ _id: req.params.id, isDeleted: false });
-    if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
-
-    if (req.user.role === 'Admission' && String(lead.assignedTo) !== String(req.user.id)) {
-      return res.status(403).json({ code: 'FORBIDDEN', message: 'You can only update your own leads' });
-    }
-
-    lead.followUps.push({
-      note: note || outcome || 'Touchpoint logged',
-      at:   new Date(),
-      by:   req.user.id
+    const skipped = leadIds.length - result.matchedCount;
+    return res.json({
+      ok: true,
+      assigned: result.modifiedCount,
+      message: `${result.modifiedCount} lead(s) assigned successfully${skipped > 0 ? ` (${skipped} skipped — not validated)` : ''}`
     });
-    await lead.save();
-
-    const populated = await MetaLead.findById(lead._id).populate('followUps.by', 'name email');
-    return res.json({ ok: true, lead: sanitize(populated, req.user.role) });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PATCH /api/meta-leads/:id/status
-// Counsellor or DM/Admin updates the pipeline status.
-// Score fields stripped for Admission. CAPI event fired on relevant transitions.
-// ═══════════════════════════════════════════════════════════════════════════════
-router.patch('/:id/status', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
-  try {
-    // Col 10–12: status, reason, counsellorFeedback
-    const { status, notes, reason, counsellorFeedback, nextFollowUpDate, admittedToCourse, admittedToBatch } = req.body || {};
-
-    const ALLOWED = ['Counseling', 'In Follow Up', 'Admitted', 'Not Admitted', 'Not Interested', 'Archived'];
-    if (!ALLOWED.includes(status)) {
-      return res.status(400).json({ code: 'INVALID_STATUS', message: `status must be one of: ${ALLOWED.join(', ')}` });
-    }
-
-    const lead = await MetaLead.findOne({ _id: req.params.id, isDeleted: false });
-    if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
-
-    // Admission can only update their own leads
-    if (req.user.role === 'Admission') {
-      if (!lead.assignedTo || String(lead.assignedTo) !== String(req.user.id)) {
-        return res.status(403).json({ code: 'FORBIDDEN', message: 'You can only update your own leads' });
-      }
-    }
-
-    const statusChanged = lead.status !== status; // reschedules resend the same status — not a real transition
-    lead.status = status;
-    if (notes              !== undefined) lead.notes              = notes;
-    if (reason             !== undefined) lead.reason             = reason;             // Col 11
-    if (counsellorFeedback !== undefined) lead.counsellorFeedback = counsellorFeedback; // Col 12
-
-    // Stage timestamps
-    if (status === 'Counseling' && !lead.counselingAt) lead.counselingAt = new Date();
-    if (status === 'Admitted') {
-      lead.admittedAt = new Date();
-      if (admittedToCourse) lead.admittedToCourse = admittedToCourse;
-      if (admittedToBatch)  lead.admittedToBatch  = admittedToBatch;
-    }
-    if (status === 'In Follow Up') {
-      if (nextFollowUpDate) lead.nextFollowUpDate = new Date(nextFollowUpDate);
-      lead.followUps.push({ note: notes || '', at: new Date(), by: req.user.id });
-    }
-
-    await lead.save();
-
-    // Queue a CAPI event instead of auto-firing. DM reviews the queue and
-    // sends selected/all events in one click from the Meta CAPI Tracking
-    // page — never fires automatically, so reschedules and accidental
-    // status flips can't inflate Meta's conversion counts.
-    const eventName = STATUS_EVENT_MAP[status];
-    if (eventName && statusChanged) {
-      CapiEventLog.create({
-        lead:          lead._id,
-        leadDisplayId: lead.leadId,
-        leadName:      lead.name,
-        leadStatus:    status,
-        event:         eventName,
-        sendStatus:    'pending'
-      }).catch(() => {});
-    }
-
-    const populated = await MetaLead.findById(lead._id)
-      .populate('assignedTo', 'name email role')
-      .populate('followUps.by', 'name email');
-
-    return res.json({ ok: true, lead: sanitize(populated, req.user.role) });
-  } catch (e) {
-    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
-  }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// POST /api/meta-leads/rescore
-// Re-score all leads that have no aiScore yet. DM / Admin only.
+// AI re-score (DM/Admin)
 // ═══════════════════════════════════════════════════════════════════════════════
 router.post('/rescore', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
-    const unscored = await MetaLead.find({ aiScore: null, isDeleted: false }).lean();
-    if (unscored.length === 0) {
-      return res.json({ ok: true, queued: 0, message: 'All leads already scored' });
-    }
-    unscored.forEach(lead => scoreLeadAsync(MetaLead, lead._id, lead));
-    return res.json({ ok: true, queued: unscored.length, message: `Scoring ${unscored.length} lead(s) in background` });
+    const unscored = await MetaCrmLead.find({ aiScore: null, isDeleted: false }).lean();
+    unscored.forEach(lead => scoreLeadAsync(MetaCrmLead, lead._id, lead));
+    return res.json({ ok: true, queued: unscored.length, message: unscored.length ? `Scoring ${unscored.length} lead(s) in background` : 'All leads already scored' });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
-// ── GET /api/meta-leads/routing-log — recent auto-assignments (Admin/DM) ─────
-router.get('/routing-log', requireAuth, authorize(MANAGE_ROLES), (req, res) => {
-  res.json({ log: routingLog });
+// ═══════════════════════════════════════════════════════════════════════════════
+// GET /api/meta-leads/quality-report?from&to — bad/lost leads by reason, campaign, ad
+// Lets DM see which campaigns/ads bring junk leads.
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/quality-report', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const match = { isDeleted: false };
+    if (from || to) {
+      match.createdAt = {};
+      if (from) match.createdAt.$gte = new Date(from);
+      if (to)   match.createdAt.$lte = new Date(new Date(to).setHours(23, 59, 59, 999));
+    }
+    const byCampaignAd = await MetaCrmLead.aggregate([
+      { $match: match },
+      { $group: {
+          _id: { campaign: '$metaCampaignName', ad: '$metaAdName' },
+          total:    { $sum: 1 },
+          bad:      { $sum: { $cond: [{ $eq: ['$leadQuality', 'Bad'] }, 1, 0] } },
+          lost:     { $sum: { $cond: [{ $eq: ['$leadQuality', 'Lost'] }, 1, 0] } },
+          admitted: { $sum: { $cond: [{ $eq: ['$status', 'Admitted'] }, 1, 0] } }
+      } },
+      { $sort: { total: -1 } }
+    ]);
+    const byReason = await MetaCrmLead.aggregate([
+      { $match: { ...match, leadQuality: { $in: ['Bad', 'Lost'] } } },
+      { $group: { _id: { quality: '$leadQuality', reason: '$qualityReason' }, count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]);
+    return res.json({
+      reasons: { bad: BAD_LEAD_REASONS, lost: LOST_LEAD_REASONS },
+      byReason: byReason.map(r => ({ quality: r._id.quality, reason: r._id.reason, count: r.count })),
+      byCampaignAd: byCampaignAd.map(r => ({
+        campaign: r._id.campaign || '(none)', ad: r._id.ad || '(none)',
+        total: r.total, bad: r.bad, lost: r.lost, admitted: r.admitted,
+        badRate: r.total ? Math.round((r.bad / r.total) * 1000) / 10 : 0
+      }))
+    });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
 });
 
-// ── GET /api/meta-leads/capi-log — dedicated Meta CAPI send queue/tracking table ──
-// Query params: sendStatus ('pending'|'sent'|'failed'), event, from, to, page, limit
+// ═══════════════════════════════════════════════════════════════════════════════
+// Meta CAPI queue — DM reviews and sends CRM stage events
+// ═══════════════════════════════════════════════════════════════════════════════
 router.get('/capi-log', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
     const { sendStatus, event, from, to, page = 1, limit = 50 } = req.query;
-    const query = {};
-    if (sendStatus) query.sendStatus = sendStatus;
+    const query = { pipeline: 'crm' };
     if (event) query.event = event;
     if (from || to) {
       query.createdAt = {};
       if (from) query.createdAt.$gte = new Date(from);
       if (to)   query.createdAt.$lte = new Date(new Date(to).setHours(23, 59, 59, 999));
     }
+    const listQuery = sendStatus ? { ...query, sendStatus } : query;
 
-    const skip  = (Number(page) - 1) * Number(limit);
+    const skip = (Number(page) - 1) * Number(limit);
     const [total, pendingCount, sentCount, failedCount, logs] = await Promise.all([
-      CapiEventLog.countDocuments(query),
+      CapiEventLog.countDocuments(listQuery),
       CapiEventLog.countDocuments({ ...query, sendStatus: 'pending' }),
       CapiEventLog.countDocuments({ ...query, sendStatus: 'sent' }),
       CapiEventLog.countDocuments({ ...query, sendStatus: 'failed' }),
-      CapiEventLog.find(query).sort({ createdAt: -1 }).skip(skip).limit(Number(limit))
+      CapiEventLog.find(listQuery).sort({ createdAt: -1 }).skip(skip).limit(Number(limit))
     ]);
 
-    return res.json({
-      logs, total, pendingCount, sentCount, failedCount,
-      page: Number(page),
-      pages: Math.ceil(total / Number(limit))
-    });
+    return res.json({ logs, total, pendingCount, sentCount, failedCount, page: Number(page), pages: Math.ceil(total / Number(limit)) });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
-// ── POST /api/meta-leads/capi-log/send — DM sends selected or all pending events ──
-// Body: { logIds: [...] } to send specific entries, or { sendAll: true } for every pending one.
-// Sends one-by-one (not batched) so each event gets a definite, individually
-// confirmed success/failure — needed for accurate DM tracking.
+// Body: { logIds: [...] } or { sendAll: true }. Sent one by one so each event
+// gets its own confirmed success/failure.
 router.post('/capi-log/send', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
     const { logIds, sendAll } = req.body || {};
-
     const query = sendAll
-      ? { sendStatus: 'pending' }
-      : { _id: { $in: Array.isArray(logIds) ? logIds : [] }, sendStatus: 'pending' };
+      ? { pipeline: 'crm', sendStatus: 'pending' }
+      : { pipeline: 'crm', _id: { $in: Array.isArray(logIds) ? logIds : [] }, sendStatus: 'pending' };
 
     const pending = await CapiEventLog.find(query).populate('lead');
-    if (pending.length === 0) {
-      return res.json({ ok: true, sent: 0, failed: 0, message: 'No pending events to send' });
-    }
+    let sent = 0, failed = 0;
+    for (const entry of pending) {
+      const result = entry.lead
+        ? await sendMetaCapiEvent(entry.lead, entry.event, entry.eventTime || entry.createdAt)
+        : { success: false, errorMessage: 'Lead no longer exists' };
 
-    let sentCount = 0, failedCount = 0;
-    for (const logEntry of pending) {
-      if (!logEntry.lead) {
-        logEntry.sendStatus = 'failed';
-        logEntry.errorMessage = 'Lead no longer exists';
-        await logEntry.save();
-        failedCount++;
-        continue;
-      }
-
-      const result = await sendMetaCapiEvent(logEntry.lead, logEntry.leadStatus);
-
-      logEntry.sentAt = new Date();
-      logEntry.sentBy = req.user.id;
-
-      if (result?.success) {
-        logEntry.sendStatus = 'sent';
-        logEntry.eventsReceived = result.eventsReceived || 0;
-        sentCount++;
-
-        await MetaLead.findByIdAndUpdate(logEntry.lead._id, {
-          sentToCapi: true,
-          $push: { capiEvents: { event: logEntry.event, success: true, at: new Date() } }
-        });
+      entry.sentAt = new Date();
+      entry.sentBy = req.user.id;
+      if (result.success) {
+        entry.sendStatus = 'sent';
+        entry.eventsReceived = result.eventsReceived || 0;
+        sent++;
       } else {
-        logEntry.sendStatus = 'failed';
-        logEntry.errorMessage = result?.errorMessage || 'Unknown error';
-        failedCount++;
+        entry.sendStatus = 'failed';
+        entry.errorMessage = result.errorMessage || 'Unknown error';
+        failed++;
+      }
+      await entry.save();
 
-        await MetaLead.findByIdAndUpdate(logEntry.lead._id, {
-          $push: { capiEvents: { event: logEntry.event, success: false, at: new Date() } }
+      if (entry.lead) {
+        await MetaCrmLead.findByIdAndUpdate(entry.lead._id, {
+          ...(result.success ? { sentToCapi: true } : {}),
+          $push: { capiEvents: { event: entry.event, success: !!result.success, at: new Date() } }
         });
       }
-      await logEntry.save();
     }
-
-    return res.json({ ok: true, sent: sentCount, failed: failedCount });
-  } catch (e) {
-    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
-  }
-});
-
-// ── TEMPORARY: Force re-score ALL leads regardless of existing score ──────────
-router.post('/rescore-all', requireAuth, authorize(ADMIN_ROLES), async (req, res) => {
-  try {
-    const all = await MetaLead.find({ isDeleted: false }).lean();
-    all.forEach(lead => scoreLeadAsync(MetaLead, lead._id, lead));
-    return res.json({ ok: true, queued: all.length, message: `Force re-scoring ${all.length} lead(s)` });
+    return res.json({ ok: true, sent, failed, message: pending.length ? undefined : 'No pending events to send' });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// POST /api/meta-leads/round-robin/trigger
-// Admin / SuperAdmin manually triggers round-robin (useful for testing).
+// Single-lead history + admin comments (same shape as /api/leads/:id/history)
 // ═══════════════════════════════════════════════════════════════════════════════
-router.post('/round-robin/trigger', requireAuth, authorize([...ADMIN_ROLES, 'DigitalMarketing']), async (req, res) => {
+router.get('/:id/history', requireAuth, async (req, res) => {
   try {
-    const result = await runRoundRobinAssignment();
-    return res.json({ ok: true, ...result });
+    const lead = await loadPopulated(req.params.id);
+    if (!lead || lead.isDeleted) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+
+    const role = req.user?.role;
+    const obj = lead.toObject({ flattenMaps: true });
+    if (role === 'Admission') {
+      if (!lead.assignedTo || String(lead.assignedTo._id) !== String(req.user.id)) {
+        return res.status(403).json({ code: 'FORBIDDEN', message: 'Cannot view history for unassigned lead' });
+      }
+      delete obj.aiScore; delete obj.aiScoredAt; delete obj.leadTemperature;
+    } else if (!['Admin', 'SuperAdmin', 'DigitalMarketing', 'ITAdmin'].includes(role)) {
+      return res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed' });
+    }
+    return res.json({ lead: obj });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DELETE /api/meta-leads/:id
-// Soft delete — Admin / SuperAdmin only.
-// ═══════════════════════════════════════════════════════════════════════════════
-router.delete('/:id', requireAuth, authorize(ADMIN_ROLES), async (req, res) => {
+router.post('/:id/admin-comment', requireAuth, authorize(ADMIN_ROLES), async (req, res) => {
   try {
-    const lead = await MetaLead.findOne({ _id: req.params.id, isDeleted: false });
+    const { text } = req.body || {};
+    if (!text || !text.trim()) return res.status(400).json({ code: 'INVALID_INPUT', message: 'Comment text is required' });
+
+    const lead = await MetaCrmLead.findOne({ _id: req.params.id, isDeleted: false });
     if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+
+    lead.adminComments.push({ text: text.trim(), at: new Date(), by: req.user.id });
+    await lead.save();
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'UPDATE', 'MetaCrmLead', lead.name,
+      `Added admin comment on Meta lead: ${lead.name} (${lead.leadId})`);
+
+    return res.json({ lead: (await loadPopulated(lead._id)).toObject({ flattenMaps: true }) });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Edit / delete (DM/Admin)
+// ═══════════════════════════════════════════════════════════════════════════════
+router.patch('/:id', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
+  try {
+    const { name, phone, email, interestedCourse, specialFilter } = req.body || {};
+    const lead = await MetaCrmLead.findOne({ _id: req.params.id, isDeleted: false });
+    if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+
+    if (name) lead.name = name;
+    if (phone !== undefined) lead.phone = phone;
+    if (email !== undefined) lead.email = email?.toLowerCase();
+    if (interestedCourse !== undefined) lead.interestedCourse = interestedCourse;
+    if (specialFilter !== undefined) lead.specialFilter = specialFilter;
+    await lead.save();
+
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'UPDATE', 'MetaCrmLead', lead.name,
+      `Updated Meta lead: ${lead.name} (${lead.leadId})`);
+    return res.json({ lead: await loadPopulated(lead._id) });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// Soft delete — keeps fee/batch references intact
+router.delete('/:id', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
+  try {
+    const lead = await MetaCrmLead.findOne({ _id: req.params.id, isDeleted: false });
+    if (!lead) return res.status(404).json({ code: 'NOT_FOUND', message: 'Lead not found' });
+    if (lead.status === 'Admitted') {
+      return res.status(400).json({ code: 'INVALID_STATE', message: 'Admitted leads cannot be deleted' });
+    }
 
     lead.isDeleted = true;
     lead.deletedAt = new Date();
     lead.deletedBy = req.user.id;
     await lead.save();
 
-    return res.json({ ok: true, message: 'Lead archived' });
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'DELETE', 'MetaCrmLead',
+      `${lead.name} (${lead.leadId})`, `Deleted Meta lead: ${lead.name} - ${lead.phone || 'N/A'} - ${lead.interestedCourse || 'N/A'}`);
+    return res.json({ ok: true, message: 'Lead deleted successfully' });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }

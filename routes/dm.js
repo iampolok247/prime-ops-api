@@ -320,7 +320,8 @@ router.get(
         }
       }
       
-      const [totalLeads, metaLeads, linkedinLeads, manualLeads, totalExpense] = await Promise.all([
+      const MetaCrmLead = (await import('../models/MetaCrmLead.js')).default;
+      const [totalLeads, metaLeads, linkedinLeads, manualLeads, totalExpense, metaCrmLeads] = await Promise.all([
         Lead.countDocuments(dateFilter),
         Lead.countDocuments({ ...dateFilter, source: 'Meta' }),
         Lead.countDocuments({ ...dateFilter, source: 'LinkedIn' }),
@@ -333,12 +334,14 @@ router.get(
             }
           }}] : []),
           { $group: { _id: null, total: { $sum: "$amount" } } }
-        ]).then(r => r[0]?.total || 0)
+        ]).then(r => r[0]?.total || 0),
+        MetaCrmLead.countDocuments({ ...dateFilter, isDeleted: false })
       ]);
       
+      // Meta CRM pipeline leads live in their own collection — include them
       return res.json({
-        totalLeads,
-        metaLeads,
+        totalLeads: totalLeads + metaCrmLeads,
+        metaLeads: metaLeads + metaCrmLeads,
         linkedinLeads,
         manualLeads,
         totalExpense

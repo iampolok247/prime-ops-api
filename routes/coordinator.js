@@ -1,6 +1,7 @@
 import express from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import Lead from '../models/Lead.js';
+import { getLeadModel } from '../utils/leadRef.js';
 import AdmissionFee from '../models/AdmissionFee.js';
 import DueFeesFollowUp from '../models/DueFeesFollowUp.js';
 import DueCollection from '../models/DueCollection.js';
@@ -137,6 +138,7 @@ router.post('/add-follow-up', requireAuth, async (req, res) => {
     const followUp = await DueFeesFollowUp.create({
       admissionFee: admissionFeeId,
       lead: leadId,
+      leadModel: admissionFee.leadModel || 'Lead',
       coordinator: req.user.id,
       followUpType,
       note,
@@ -291,6 +293,7 @@ router.post('/collect-due', requireAuth, async (req, res) => {
     const dueCollection = await DueCollection.create({
       admissionFee: admissionFee._id,
       lead: admissionFee.lead,
+      leadModel: admissionFee.leadModel || 'Lead',
       coordinator: req.user.id,
       amount: Number(additionalPayment),
       paymentMethod: paymentMethod || 'Cash',
@@ -306,6 +309,7 @@ router.post('/collect-due', requireAuth, async (req, res) => {
     await DueFeesFollowUp.create({
       admissionFee: admissionFee._id,
       lead: admissionFee.lead,
+      leadModel: admissionFee.leadModel || 'Lead',
       coordinator: req.user.id,
       followUpType: 'Other',
       note: collectionNote,
@@ -318,7 +322,7 @@ router.post('/collect-due', requireAuth, async (req, res) => {
       .populate('coordinator', 'name email');
 
     // Notify accountants about new due collection
-    const leadInfo = await Lead.findById(admissionFee.lead);
+    const leadInfo = await getLeadModel(admissionFee.leadModel).findById(admissionFee.lead);
     await notifyAccountants({
       sender: req.user.id,
       type: 'DUE_COLLECTION_SUBMITTED',
