@@ -34,7 +34,8 @@ const NotificationSchema = new mongoose.Schema(
         'DUE_COLLECTION_SUBMITTED',
         'RECRUITMENT_INCOME_SUBMITTED',
         'REQUISITION_SUBMITTED',
-        'MANUAL_DUE_PAYMENT'
+        'MANUAL_DUE_PAYMENT',
+        'META_LEAD_ASSIGNED'
       ],
       required: true
     },

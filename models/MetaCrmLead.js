@@ -43,6 +43,7 @@ const MetaCrmLeadSchema = new mongoose.Schema(
     specialFilter: { type: String, default: '', trim: true },
     // stage timestamps
     assignedAt: { type: Date },
+    autoAssigned: { type: Boolean, default: false }, // assigned by course → counsellor rule on arrival
     counselingAt: { type: Date },
     admittedAt: { type: Date },
     followUps: [

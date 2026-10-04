@@ -21,6 +21,8 @@ import { scoreLeadAsync } from '../utils/aiScoring.js';
 import { sendPendingCapiEvents, queueCapiStageEvent, LEAD_RECEIVED_EVENT } from '../utils/metaCapi.js';
 import { logActivity }  from './activities.js';
 import { BAD_LEAD_REASONS, LOST_LEAD_REASONS, DISQUALIFIED_EVENT } from '../utils/leadQuality.js';
+import MetaCourseAssignment, { courseKeyOf } from '../models/MetaCourseAssignment.js';
+import { createNotification } from '../utils/notifications.js';
 
 const router = express.Router();
 
@@ -62,6 +64,17 @@ async function isDuplicate(phone, email, interestedCourse) {
     isDeleted: false
   });
   return !!dup;
+}
+
+// ── Course → counsellor auto-assignment ──────────────────────────────────────
+// Returns the counsellor set for this course if they can take leads right now
+// (active Admission member, not on leave); otherwise null → lead waits for DM.
+async function autoAssignCounsellorFor(courseName) {
+  if (!courseName) return null;
+  const rule = await MetaCourseAssignment.findOne({ courseKey: courseKeyOf(courseName) }).populate('counsellor', 'name role isActive onLeave');
+  const c = rule?.counsellor;
+  if (!c || c.role !== 'Admission' || c.isActive === false || c.onLeave) return null;
+  return c;
 }
 
 // ── Webhook auth ──────────────────────────────────────────────────────────────
@@ -203,7 +216,26 @@ router.post('/webhook', async (req, res) => {
     scoreLeadAsync(MetaCrmLead, lead._id, lead);          // AI score (async, non-blocking)
     await queueCapiStageEvent(lead, LEAD_RECEIVED_EVENT); // raw-lead stage for Meta CRM optimisation
 
-    return res.status(201).json({ ok: true, leadId: lead.leadId });
+    // Course has a counsellor set → assign straight away (skips DM validation).
+    // No counsellor / on leave → stays in Pending Validation for the DM.
+    const counsellor = await autoAssignCounsellorFor(course);
+    if (counsellor) {
+      const now = new Date();
+      await MetaCrmLead.updateOne({ _id: lead._id }, { $set: {
+        validationStatus: 'validated', validatedAt: now,
+        assignedTo: counsellor._id, assignedAt: now, autoAssigned: true, status: 'Assigned'
+      } });
+      await createNotification({
+        recipient: counsellor._id,
+        type: 'META_LEAD_ASSIGNED',
+        title: 'New Meta lead assigned to you',
+        message: `${lead.name}${lead.phone ? ` (${lead.phone})` : ''} — ${course}`,
+        link: '/meta-crm/assigned',
+        relatedModel: null
+      });
+    }
+
+    return res.status(201).json({ ok: true, leadId: lead.leadId, autoAssignedTo: counsellor?.name || null });
   } catch (e) {
     console.error('[Meta Webhook] Error:', e.message);
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
@@ -477,6 +509,59 @@ router.post('/rescore', requireAuth, authorize(MANAGE_ROLES), async (req, res) =
     const unscored = await MetaCrmLead.find({ aiScore: null, isDeleted: false }).lean();
     unscored.forEach(lead => scoreLeadAsync(MetaCrmLead, lead._id, lead));
     return res.json({ ok: true, queued: unscored.length, message: unscored.length ? `Scoring ${unscored.length} lead(s) in background` : 'All leads already scored' });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Auto-assign settings: one counsellor per course (DM/Admin)
+// GET returns every Active course with its counsellor (or null).
+// PUT { courseName, counsellorId } sets it; counsellorId null/'' removes it.
+// ═══════════════════════════════════════════════════════════════════════════════
+router.get('/course-assignments', requireAuth, authorize(VIEW_ROLES), async (req, res) => {
+  try {
+    const [courses, rules] = await Promise.all([
+      Course.find({ status: 'Active' }).select('name').sort({ name: 1 }).lean(),
+      MetaCourseAssignment.find().populate('counsellor', 'name email onLeave isActive').populate('updatedBy', 'name').lean()
+    ]);
+    const byKey = new Map(rules.map(r => [r.courseKey, r]));
+    const rows = courses.map(c => {
+      const r = byKey.get(courseKeyOf(c.name));
+      byKey.delete(courseKeyOf(c.name));
+      return { courseName: c.name, counsellor: r?.counsellor || null, updatedBy: r?.updatedBy || null, updatedAt: r?.updatedAt || null };
+    });
+    // Rules for courses that are no longer Active still apply — show them too
+    for (const r of byKey.values()) rows.push({ courseName: r.courseName, counsellor: r.counsellor, updatedBy: r.updatedBy, updatedAt: r.updatedAt, inactiveCourse: true });
+    return res.json({ rows });
+  } catch (e) {
+    return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
+  }
+});
+
+router.put('/course-assignments', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
+  try {
+    const { courseName, counsellorId } = req.body || {};
+    const key = courseKeyOf(courseName);
+    if (!key) return res.status(400).json({ code: 'VALIDATION_ERROR', message: 'courseName is required' });
+
+    if (!counsellorId) {
+      await MetaCourseAssignment.deleteOne({ courseKey: key });
+      await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'UPDATE', 'MetaCourseAssignment', courseName,
+        `Removed Meta auto-assign counsellor for ${courseName}`);
+      return res.json({ ok: true, courseName, counsellor: null });
+    }
+    const user = await getAdmissionUser(counsellorId);
+    if (!user) return res.status(400).json({ code: 'INVALID_ASSIGNEE', message: 'Counsellor must be an Admission member' });
+
+    await MetaCourseAssignment.findOneAndUpdate(
+      { courseKey: key },
+      { $set: { courseName: String(courseName).trim(), courseKey: key, counsellor: user._id, updatedBy: req.user.id } },
+      { upsert: true, new: true }
+    );
+    await logActivity(req.user.id, req.user.name, req.user.email, req.user.role, 'UPDATE', 'MetaCourseAssignment', courseName,
+      `Meta leads for ${courseName} now auto-assign to ${user.name}`);
+    return res.json({ ok: true, courseName, counsellor: { _id: user._id, name: user.name } });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
