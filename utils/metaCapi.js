@@ -90,21 +90,30 @@ export async function queueCapiStageEvent(lead, status, userId) {
   }
 }
 
+// Meta expects user_data.lead_id as a JSON number. Leadgen IDs can exceed
+// Number.MAX_SAFE_INTEGER, so emit the digits verbatim instead of converting.
+export function toMetaJson(payload) {
+  return JSON.stringify(payload).replace(/"lead_id":"(\d{1,20})"/g, '"lead_id":$1');
+}
+
+export const isCapiConfigured = () => !!(PIXEL_ID && ACCESS_TOKEN);
+
 /**
  * Send one CRM stage event to Meta. Returns { success, eventsReceived } or
- * { success: false, errorMessage }.
+ * { success: false, errorMessage, permanent }. `permanent` failures can never
+ * succeed (no leadgen ID, too old); everything else is worth retrying.
  */
 export async function sendMetaCapiEvent(lead, event, eventTime) {
-  if (!PIXEL_ID || !ACCESS_TOKEN) {
+  if (!isCapiConfigured()) {
     return { success: false, errorMessage: 'META_PIXEL_ID / META_ACCESS_TOKEN not set on the server' };
   }
   if (!lead.metaLeadId) {
-    return { success: false, errorMessage: 'Lead has no Meta leadgen ID — Meta cannot match it' };
+    return { success: false, permanent: true, errorMessage: 'Lead has no Meta leadgen ID — Meta cannot match it' };
   }
 
   const at = eventTime ? new Date(eventTime) : new Date();
   if (Date.now() - at.getTime() > MAX_EVENT_AGE_MS) {
-    return { success: false, errorMessage: 'Event is older than 7 days — Meta no longer accepts it' };
+    return { success: false, permanent: true, errorMessage: 'Event is older than 7 days — Meta no longer accepts it' };
   }
 
   const userData = { lead_id: String(lead.metaLeadId) };
@@ -131,7 +140,7 @@ export async function sendMetaCapiEvent(lead, event, eventTime) {
     const res  = await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(payload)
+      body:    toMetaJson(payload)
     });
     const data = await res.json();
 
@@ -145,4 +154,56 @@ export async function sendMetaCapiEvent(lead, event, eventTime) {
     console.error('[Meta CAPI] Error:', e.message);
     return { success: false, errorMessage: e.message };
   }
+}
+
+/**
+ * Send queued CRM events. Used by the DM "Send" buttons and the nightly job.
+ * A failed send stays 'pending' (with the error and attempt count) and is
+ * retried next time — so a missing token, a permission problem or a Meta
+ * outage never loses events. It only becomes 'failed' when it can never
+ * succeed: lead gone, no leadgen ID, or older than Meta's 7-day limit.
+ */
+export async function sendPendingCapiEvents({ logIds, userId } = {}) {
+  if (!isCapiConfigured()) {
+    return { sent: 0, failed: 0, retrying: 0, configured: false,
+      message: 'Meta CAPI is not configured on the server (META_PIXEL_ID / META_ACCESS_TOKEN) — events stay pending' };
+  }
+  const { default: MetaCrmLead } = await import('../models/MetaCrmLead.js');
+  const query = { pipeline: 'crm', sendStatus: 'pending' };
+  if (Array.isArray(logIds)) query._id = { $in: logIds };
+
+  const pending = await CapiEventLog.find(query).sort({ createdAt: 1 }).populate('lead');
+  let sent = 0, failed = 0, retrying = 0;
+  for (const entry of pending) {
+    const result = entry.lead
+      ? await sendMetaCapiEvent(entry.lead, entry.event, entry.eventTime || entry.createdAt)
+      : { success: false, permanent: true, errorMessage: 'Lead no longer exists' };
+
+    entry.attempts = (entry.attempts || 0) + 1;
+    entry.lastAttemptAt = new Date();
+    if (result.success) {
+      entry.sendStatus = 'sent';
+      entry.sentAt = new Date();
+      entry.sentBy = userId || undefined;
+      entry.errorMessage = '';
+      entry.eventsReceived = result.eventsReceived || 0;
+      sent++;
+    } else if (result.permanent) {
+      entry.sendStatus = 'failed';
+      entry.errorMessage = result.errorMessage || 'Unknown error';
+      failed++;
+    } else {
+      entry.errorMessage = `Will retry: ${result.errorMessage || 'Unknown error'}`;
+      retrying++;
+    }
+    await entry.save();
+
+    if (entry.lead && (result.success || result.permanent)) {
+      await MetaCrmLead.findByIdAndUpdate(entry.lead._id, {
+        ...(result.success ? { sentToCapi: true } : {}),
+        $push: { capiEvents: { event: entry.event, success: !!result.success, at: new Date() } }
+      });
+    }
+  }
+  return { sent, failed, retrying, configured: true };
 }

@@ -37,6 +37,7 @@ import seminarRoutes from "./routes/seminars.js";      // Seminar notices on das
 import metaLeadsRoutes from "./routes/metaLeads.js";   // Meta CRM — DM side + Make.com webhook + CAPI
 import cron from "node-cron";
 import { runFollowUpDueReminders } from "./jobs/followUpReminders.js";
+import { sendPendingCapiEvents } from "./utils/metaCapi.js";
 
 dotenv.config();
 
@@ -159,6 +160,15 @@ connectDB(process.env.MONGO_URI)
     cron.schedule('0 3 * * *', () => {
       console.log('[Cron] Triggering follow-up due reminders…');
       runFollowUpDueReminders().catch(e => console.error('[Cron] Follow-up reminders failed:', e.message));
+    }, { timezone: 'UTC' });
+
+    // Daily 11 PM BST (= 17:00 UTC) — send queued Meta CAPI (CRM) events.
+    // Meta wants CRM events at least daily; failed sends stay pending and retry.
+    cron.schedule('0 17 * * *', () => {
+      console.log('[Cron] Sending pending Meta CAPI events…');
+      sendPendingCapiEvents()
+        .then(r => console.log('[Cron] Meta CAPI:', r.message || `${r.sent} sent, ${r.retrying} retrying, ${r.failed} failed`))
+        .catch(e => console.error('[Cron] Meta CAPI send failed:', e.message));
     }, { timezone: 'UTC' });
   })
   .catch((err) => {

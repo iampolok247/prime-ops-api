@@ -21,6 +21,8 @@ const CapiEventLogSchema = new mongoose.Schema(
     sentAt:        { type: Date },
     sentBy:        { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // which DM clicked send
     errorMessage:  { type: String, default: '' },
+    attempts:      { type: Number, default: 0 },             // send attempts (failed sends stay pending and retry)
+    lastAttemptAt: { type: Date },
     eventsReceived:{ type: Number, default: 0 }
   },
   { timestamps: true } // createdAt = when it was queued

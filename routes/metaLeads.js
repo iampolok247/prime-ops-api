@@ -18,7 +18,7 @@ import CapiEventLog     from '../models/CapiEventLog.js';
 import { requireAuth }  from '../middleware/auth.js';
 import { authorize }    from '../middleware/authorize.js';
 import { scoreLeadAsync } from '../utils/aiScoring.js';
-import { sendMetaCapiEvent, queueCapiStageEvent, LEAD_RECEIVED_EVENT } from '../utils/metaCapi.js';
+import { sendPendingCapiEvents, queueCapiStageEvent, LEAD_RECEIVED_EVENT } from '../utils/metaCapi.js';
 import { logActivity }  from './activities.js';
 import { BAD_LEAD_REASONS, LOST_LEAD_REASONS, DISQUALIFIED_EVENT } from '../utils/leadQuality.js';
 
@@ -555,43 +555,21 @@ router.get('/capi-log', requireAuth, authorize(MANAGE_ROLES), async (req, res) =
   }
 });
 
-// Body: { logIds: [...] } or { sendAll: true }. Sent one by one so each event
-// gets its own confirmed success/failure.
+// Body: { logIds: [...] } or { sendAll: true }. Events that fail for a
+// temporary reason stay pending and are retried (also by the nightly job).
 router.post('/capi-log/send', requireAuth, authorize(MANAGE_ROLES), async (req, res) => {
   try {
     const { logIds, sendAll } = req.body || {};
-    const query = sendAll
-      ? { pipeline: 'crm', sendStatus: 'pending' }
-      : { pipeline: 'crm', _id: { $in: Array.isArray(logIds) ? logIds : [] }, sendStatus: 'pending' };
-
-    const pending = await CapiEventLog.find(query).populate('lead');
-    let sent = 0, failed = 0;
-    for (const entry of pending) {
-      const result = entry.lead
-        ? await sendMetaCapiEvent(entry.lead, entry.event, entry.eventTime || entry.createdAt)
-        : { success: false, errorMessage: 'Lead no longer exists' };
-
-      entry.sentAt = new Date();
-      entry.sentBy = req.user.id;
-      if (result.success) {
-        entry.sendStatus = 'sent';
-        entry.eventsReceived = result.eventsReceived || 0;
-        sent++;
-      } else {
-        entry.sendStatus = 'failed';
-        entry.errorMessage = result.errorMessage || 'Unknown error';
-        failed++;
-      }
-      await entry.save();
-
-      if (entry.lead) {
-        await MetaCrmLead.findByIdAndUpdate(entry.lead._id, {
-          ...(result.success ? { sentToCapi: true } : {}),
-          $push: { capiEvents: { event: entry.event, success: !!result.success, at: new Date() } }
-        });
-      }
-    }
-    return res.json({ ok: true, sent, failed, message: pending.length ? undefined : 'No pending events to send' });
+    const result = await sendPendingCapiEvents({
+      logIds: sendAll ? undefined : (Array.isArray(logIds) ? logIds : []),
+      userId: req.user.id
+    });
+    const message = result.message || [
+      `${result.sent} sent`,
+      result.retrying ? `${result.retrying} will retry` : null,
+      result.failed ? `${result.failed} failed` : null
+    ].filter(Boolean).join(', ');
+    return res.json({ ok: true, ...result, message });
   } catch (e) {
     return res.status(500).json({ code: 'SERVER_ERROR', message: e.message });
   }
