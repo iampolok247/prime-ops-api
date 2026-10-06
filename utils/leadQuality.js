@@ -12,6 +12,8 @@ export const BAD_LEAD_REASONS = [
   'Unreachable (5+ tries)',
   'Irrelevant / wrong course',
   'Duplicate lead',
+  'Asking for free',
+  'Far from location',
 ];
 
 export const LOST_LEAD_REASONS = [
